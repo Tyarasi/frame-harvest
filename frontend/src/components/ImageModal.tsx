@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type YoloBox } from '../api'
+import { useConfirm } from './ConfirmProvider'
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -41,6 +42,16 @@ interface Props {
   // 1 kelas "person" (cocok untuk resep ResNet yang memang cuma 1 kelas
   // implisit); resep YOLO mengirim daftar kelas asli project (bisa > 1).
   classNames?: string[]
+  // true kalau daftar kelas BOLEH dikelola (tambah/hapus) langsung dari
+  // popup pemilih kelas di sini — cuma resep YOLO (classNames bukan implisit
+  // "person"). Kalau false, popup cuma buat MEMILIH dari daftar yang ada,
+  // tidak menampilkan tombol tambah/hapus kelas sama sekali.
+  manageClasses?: boolean
+  // dipanggil kalau daftar kelas berubah (tambah/hapus) dari popup — pemilik
+  // daftar kelas yang SEBENARNYA ada di komponen pemanggil (disimpan ke
+  // dataset_prep_config), ImageModal cuma minta perubahan lewat sini,
+  // bukan menyimpan sendiri.
+  onClassNamesChange?: (next: string[]) => void
 }
 
 // Representasi internal saat mengedit: dua titik sudut, bukan pusat+ukuran —
@@ -142,20 +153,25 @@ export function ImageModal({
   labelBadge,
   labelBadgeBg = 'rgba(2, 6, 23, 0.8)',
   classNames = ['person'],
+  manageClasses = false,
+  onClassNamesChange,
 }: Props) {
+  const confirm = useConfirm()
   const [boxes, setBoxes] = useState<CornerBox[]>([])
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
   // kelas yang TERAKHIR dipilih user — dipakai sebagai default box
   // berikutnya (gambar beberapa box sekelas berturut-turut tidak perlu pilih
-  // ulang tiap kali). Cuma relevan kalau project ini punya >1 kelas (resep
-  // YOLO multi-kelas); resep 1 kelas selalu 0, popup pemilih tidak pernah
+  // ulang tiap kali). Cuma relevan kalau manageClasses aktif (resep YOLO);
+  // resep 1 kelas implisit (ResNet) selalu 0, popup pemilih tidak pernah
   // muncul sama sekali.
   const [lastUsedClassId, setLastUsedClassId] = useState(0)
   // index box yang lagi menampilkan popup "pilih kelas" (gaya Roboflow: popup
   // menempel ke box begitu selesai digambar/diklik, BUKAN strip pemilih
   // terpisah di atas gambar) — null kalau tidak ada yang lagi terbuka
   const [openClassPopup, setOpenClassPopup] = useState<number | null>(null)
+  // isi input "+ Tambah" di dalam popup — cuma dipakai kalau manageClasses
+  const [newClassName, setNewClassName] = useState('')
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -363,10 +379,11 @@ export function ImageModal({
           if (!box || box.x2 - box.x1 < MIN_SIZE || box.y2 - box.y1 < MIN_SIZE) {
             return prev.filter((_, i) => i !== ds.index)
           }
-          // box baru selesai digambar & valid — kalau ada >1 kelas untuk
-          // dipilih, langsung buka popup pemilih menempel di box ini (gaya
-          // Roboflow), bukan minta user pilih kelas dulu SEBELUM menggambar
-          if (classNames.length > 1) setOpenClassPopup(ds.index)
+          // box baru selesai digambar & valid — kalau daftar kelas bisa
+          // dikelola di sini (resep YOLO), langsung buka popup pemilih
+          // menempel di box ini (gaya Roboflow), bukan minta user pilih
+          // kelas dulu SEBELUM menggambar
+          if (manageClasses) setOpenClassPopup(ds.index)
           return prev
         })
       }
@@ -397,6 +414,44 @@ export function ImageModal({
     setBoxes((prev) => prev.map((b, i) => (i === index ? { ...b, classId } : b)))
     setLastUsedClassId(classId)
     setOpenClassPopup(null)
+  }
+
+  // tambah kelas baru ke AKHIR daftar — aman, tidak menggeser index kelas
+  // manapun yang sudah ada, jadi tidak perlu konfirmasi
+  function addClass() {
+    const name = newClassName.trim()
+    if (!name || classNames.includes(name)) return
+    onClassNamesChange?.([...classNames, name])
+    setNewClassName('')
+  }
+
+  // hapus kelas dari daftar — TIDAK aman seperti tambah: index kelas
+  // setelahnya ikut bergeser mundur 1, dan itu jadi acuan class_id di file
+  // .txt SEMUA gambar di project ini, bukan cuma yang sedang dibuka. Box di
+  // gambar ini otomatis disesuaikan (di bawah), tapi gambar lain yang sudah
+  // ke-save duluan TIDAK ikut disesuaikan otomatis — makanya wajib
+  // konfirmasi eksplisit, tidak boleh sekali klik langsung hilang.
+  async function removeClass(classId: number) {
+    if (classNames.length <= 1) return
+    const ok = await confirm({
+      title: 'Hapus kelas ini?',
+      message: `Kelas "${classNames[classId]}" (index ${classId}) dipakai sebagai acuan urutan di data.yaml dan di SEMUA gambar project ini, bukan cuma yang sedang dibuka. Box di gambar ini otomatis disesuaikan, tapi box yang SUDAH tersimpan di gambar lain dengan index ${classId} atau lebih besar bisa salah acu setelah ini — cek ulang manual kalau perlu.`,
+      confirmLabel: 'Hapus Kelas',
+      danger: true,
+    })
+    if (!ok) return
+    onClassNamesChange?.(classNames.filter((_, i) => i !== classId))
+    // box di gambar YANG SEDANG DIBUKA ini ikut disesuaikan supaya tidak
+    // langsung salah acu begitu daftar kelasnya berubah: yang persis pakai
+    // kelas yang dihapus jatuh ke 0, yang index-nya lebih besar mundur 1
+    setBoxes((prev) =>
+      prev.map((b) => {
+        if (b.classId === classId) return { ...b, classId: 0 }
+        if (b.classId > classId) return { ...b, classId: b.classId - 1 }
+        return b
+      }),
+    )
+    setLastUsedClassId((c) => (c === classId ? 0 : c > classId ? c - 1 : c))
   }
 
   function handleBoxPointerDown(e: React.PointerEvent, index: number) {
@@ -647,8 +702,8 @@ export function ImageModal({
             {boxes.map((box, i) => {
               const isActive = dragState?.index === i || hoveredIndex === i
               const color = classColor(box.classId)
-              const canReassign = editing && classNames.length > 1
-              const popupOpen = canReassign && openClassPopup === i
+              const canManage = editing && manageClasses
+              const popupOpen = canManage && openClassPopup === i
               return (
                 <div
                   key={i}
@@ -679,7 +734,7 @@ export function ImageModal({
                     zIndex: dragState?.index === i ? 50 : popupOpen ? 45 : hoveredIndex === i ? 40 : i + 1,
                   }}
                 >
-                  {canReassign ? (
+                  {canManage ? (
                     <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
@@ -702,47 +757,91 @@ export function ImageModal({
                     // Popup "pilih kelas" menempel di box — gaya Roboflow: muncul
                     // SETELAH box selesai digambar (dipicu dari onUp di atas) atau
                     // saat label box yang sudah ada diklik, bukan strip pemilih
-                    // terpisah di atas gambar yang dipilih SEBELUM menggambar.
-                    // Gaya baris-nya SENGAJA disamakan dengan kartu "Daftar Kelas"
-                    // (ClassNamesEditor.tsx) — badge nomor index + border, bukan
-                    // titik warna kecil — biar satu bahasa visual, bukan dua
-                    // gaya list berbeda buat 1 konsep yang sama (kelas ke-i)
+                    // terpisah di atas gambar yang dipilih SEBELUM menggambar. Kalau
+                    // manageClasses aktif, popup ini JUGA satu-satunya tempat kelola
+                    // daftar kelas (tambah/hapus) — tidak ada lagi kartu terpisah di
+                    // halaman Persiapan Dataset, biar tidak dua sumber kebenaran.
                     <div
                       onPointerDown={(e) => e.stopPropagation()}
-                      className="absolute left-[calc(100%+8px)] top-0 z-[60] w-48 rounded-lg border border-slate-800 bg-slate-950 p-3 shadow-xl"
+                      className="absolute left-[calc(100%+8px)] top-0 z-[60] w-56 rounded-lg border border-slate-800 bg-slate-950 p-3 shadow-xl"
                     >
-                      <p className="mb-2 text-xs font-medium text-slate-400">Pilih Kelas</p>
+                      <p className="mb-1 text-xs font-medium text-slate-400">
+                        Daftar Kelas ({classNames.length})
+                      </p>
+                      <p className="mb-2 text-[11px] text-slate-600">Klik nama untuk pilih kelas box ini.</p>
                       <ul className="mb-2 space-y-1">
                         {classNames.map((name, ci) => {
                           const selected = box.classId === ci
                           const optColor = classColor(ci)
                           return (
-                            <li key={ci}>
+                            <li
+                              key={ci}
+                              className="flex items-center gap-1 rounded-lg border bg-slate-800"
+                              style={{ borderColor: selected ? optColor : '#334155' }}
+                            >
                               <button
                                 type="button"
                                 onClick={() => setBoxClass(i, ci)}
-                                className="flex w-full items-center justify-between gap-2 rounded-lg border bg-slate-800 px-3 py-1.5 text-left text-sm text-slate-100 hover:bg-slate-700"
-                                style={{ borderColor: selected ? optColor : '#334155' }}
+                                className="flex flex-1 items-center gap-2 px-3 py-1.5 text-left text-sm text-slate-100 hover:bg-slate-700"
                               >
                                 <span className="truncate">
                                   <span className="mr-2 font-mono text-xs text-slate-500">{ci}</span>
                                   {name}
                                 </span>
                                 {selected && (
-                                  <CheckIcon className="h-3.5 w-3.5 shrink-0" style={{ color: optColor }} />
+                                  <CheckIcon
+                                    className="ml-auto h-3.5 w-3.5 shrink-0"
+                                    style={{ color: optColor }}
+                                  />
                                 )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeClass(ci)}
+                                disabled={classNames.length <= 1}
+                                title={
+                                  classNames.length <= 1
+                                    ? 'Minimal 1 kelas harus ada'
+                                    : `Hapus kelas "${name}" dari daftar`
+                                }
+                                className="shrink-0 pr-2 text-slate-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-30"
+                              >
+                                <CloseIcon className="h-3.5 w-3.5" />
                               </button>
                             </li>
                           )
                         })}
                       </ul>
+                      <div className="mb-2 flex gap-1.5">
+                        <input
+                          type="text"
+                          value={newClassName}
+                          onChange={(e) => setNewClassName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              addClass()
+                            }
+                          }}
+                          placeholder="Kelas baru…"
+                          className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={addClass}
+                          disabled={!newClassName.trim() || classNames.includes(newClassName.trim())}
+                          className="shrink-0 rounded-lg border border-blue-900 px-2 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                          + Tambah
+                        </button>
+                      </div>
                       <button
                         type="button"
                         onClick={() => deleteBox(i)}
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-900 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950"
                       >
                         <TrashIcon className="h-3.5 w-3.5" />
-                        Hapus Box
+                        Hapus Box Ini
                       </button>
                     </div>
                   )}

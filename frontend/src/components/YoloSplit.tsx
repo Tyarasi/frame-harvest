@@ -79,8 +79,8 @@ export function YoloSplit({ projectId, classNames }: Props) {
           ))}
         </div>
         <p className="mt-2 text-[11px] text-slate-600">
-          Mau tambah/hapus/ubah kelas? Kembali ke langkah "Frame & BBox" — daftar kelas diatur di sana
-          supaya sudah siap dipakai sejak mulai gambar bbox.
+          Mau tambah/hapus kelas? Kembali ke langkah "Frame & BBox", klik box mana pun untuk buka
+          popup "Pilih Kelas" — daftar kelas dikelola dari sana, dekat dengan tempat kamu gambar bbox-nya.
         </p>
       </div>
 
