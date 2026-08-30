@@ -86,23 +86,36 @@ def _build_model(backbone: str, num_classes: int, freeze_backbone: bool) -> nn.M
     return model
 
 
-def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device, num_classes: int) -> dict:
+def _evaluate_detailed(model: nn.Module, loader: DataLoader, device: torch.device, num_classes: int) -> dict:
+    """Sama seperti _evaluate, tapi juga mengembalikan prediksi PER-GAMBAR
+    (index true/pred/confidence, urutan mengikuti urutan dataset — aman
+    selama loader dibuat dengan shuffle=False). Dipisah dari _evaluate
+    (dipanggil tiap epoch saat training) supaya hot-path training tidak
+    perlu bangun list per-sample yang cuma dibutuhkan evaluasi test set."""
     model.eval()
     correct = 0
     total = 0
     tp = [0] * num_classes
     fp = [0] * num_classes
     fn = [0] * num_classes
+    true_indices: list[int] = []
+    pred_indices: list[int] = []
+    confidences: list[float] = []
     with torch.no_grad():
         for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
-            preds = model(images).argmax(dim=1)
+            probs = torch.softmax(model(images), dim=1)
+            preds = probs.argmax(dim=1)
+            conf = probs.gather(1, preds.unsqueeze(1)).squeeze(1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
             for c in range(num_classes):
                 tp[c] += int(((preds == c) & (labels == c)).sum().item())
                 fp[c] += int(((preds == c) & (labels != c)).sum().item())
                 fn[c] += int(((preds != c) & (labels == c)).sum().item())
+            true_indices.extend(labels.cpu().tolist())
+            pred_indices.extend(preds.cpu().tolist())
+            confidences.extend(conf.cpu().tolist())
 
     # macro-average antar kelas — netral terhadap ketimpangan jumlah data
     # per label, cocok untuk project apapun (tidak diasumsikan binary)
@@ -112,7 +125,16 @@ def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device, num_cl
     recall = sum(recalls) / num_classes if num_classes else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
     accuracy = correct / total if total else 0.0
-    return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1}
+    return {
+        "metrics": {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1},
+        "true_indices": true_indices,
+        "pred_indices": pred_indices,
+        "confidences": confidences,
+    }
+
+
+def _evaluate(model: nn.Module, loader: DataLoader, device: torch.device, num_classes: int) -> dict:
+    return _evaluate_detailed(model, loader, device, num_classes)["metrics"]
 
 
 def _run_training(job: TrainingJob, project_dir: Path, config: dict) -> None:
@@ -270,7 +292,21 @@ def evaluate_test_set(project_dir: Path) -> dict:
     model.to(device)
 
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
-    metrics = _evaluate(model, test_loader, device, len(class_names))
+    detailed = _evaluate_detailed(model, test_loader, device, len(class_names))
+    metrics = detailed["metrics"]
+
+    predictions = [
+        {
+            "path": Path(path).relative_to(test_dir).as_posix(),
+            "true_label": class_names[true_idx],
+            "predicted_label": class_names[pred_idx],
+            "correct": true_idx == pred_idx,
+            "confidence": round(conf, 4),
+        }
+        for (path, _), true_idx, pred_idx, conf in zip(
+            test_dataset.samples, detailed["true_indices"], detailed["pred_indices"], detailed["confidences"]
+        )
+    ]
 
     return {
         "num_images": len(test_dataset),
@@ -279,4 +315,5 @@ def evaluate_test_set(project_dir: Path) -> dict:
         "precision": round(metrics["precision"], 4),
         "recall": round(metrics["recall"], 4),
         "f1": round(metrics["f1"], 4),
+        "predictions": predictions,
     }
