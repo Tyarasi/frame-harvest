@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type YoloBox } from '../api'
 import {
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
@@ -74,14 +75,6 @@ function classLabel(classId: number, classNames: string[]): string {
   return classNames[classId] ?? `Kelas ${classId}`
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const n = parseInt(hex.slice(1), 16)
-  const r = (n >> 16) & 255
-  const g = (n >> 8) & 255
-  const b = n & 255
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
 function toYolo(box: CornerBox): YoloBox {
   return {
     x: (box.x1 + box.x2) / 2,
@@ -153,10 +146,16 @@ export function ImageModal({
   const [boxes, setBoxes] = useState<CornerBox[]>([])
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
-  // kelas yang dipakai untuk box BARU yang mau digambar — cuma relevan kalau
-  // project ini punya lebih dari 1 kelas (resep YOLO multi-kelas); resep 1
-  // kelas tidak pernah menampilkan pemilihnya jadi ini selalu 0
-  const [activeClassId, setActiveClassId] = useState(0)
+  // kelas yang TERAKHIR dipilih user — dipakai sebagai default box
+  // berikutnya (gambar beberapa box sekelas berturut-turut tidak perlu pilih
+  // ulang tiap kali). Cuma relevan kalau project ini punya >1 kelas (resep
+  // YOLO multi-kelas); resep 1 kelas selalu 0, popup pemilih tidak pernah
+  // muncul sama sekali.
+  const [lastUsedClassId, setLastUsedClassId] = useState(0)
+  // index box yang lagi menampilkan popup "pilih kelas" (gaya Roboflow: popup
+  // menempel ke box begitu selesai digambar/diklik, BUKAN strip pemilih
+  // terpisah di atas gambar) — null kalau tidak ada yang lagi terbuka
+  const [openClassPopup, setOpenClassPopup] = useState<number | null>(null)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -213,6 +212,14 @@ export function ImageModal({
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (editing) {
+        // popup "pilih kelas" lagi terbuka: Escape nutup POPUP-nya dulu saja,
+        // BUKAN langsung batalkan seluruh sesi koreksi — orang biasanya cuma
+        // mau tutup pemilihnya, box yang sudah digambar tidak boleh ikut hilang
+        if (e.key === 'Escape' && openClassPopup !== null) {
+          e.preventDefault()
+          setOpenClassPopup(null)
+          return
+        }
         // selagi koreksi: Enter = simpan, Escape = batal (bukan tutup/pindah gambar)
         if (e.key === 'Enter' && !saving) {
           e.preventDefault()
@@ -273,6 +280,7 @@ export function ImageModal({
     boxes,
     fullscreen,
     confirmingDelete,
+    openClassPopup,
     label,
     filename,
     annotationUrl,
@@ -282,6 +290,7 @@ export function ImageModal({
   useEffect(() => {
     setBoxes([])
     setEditing(false)
+    setOpenClassPopup(null)
     if (!annotationUrl) return
     let cancelled = false
     // no-store: file .txt ini sering diedit (koreksi manual), bukan aset
@@ -354,6 +363,10 @@ export function ImageModal({
           if (!box || box.x2 - box.x1 < MIN_SIZE || box.y2 - box.y1 < MIN_SIZE) {
             return prev.filter((_, i) => i !== ds.index)
           }
+          // box baru selesai digambar & valid — kalau ada >1 kelas untuk
+          // dipilih, langsung buka popup pemilih menempel di box ini (gaya
+          // Roboflow), bukan minta user pilih kelas dulu SEBELUM menggambar
+          if (classNames.length > 1) setOpenClassPopup(ds.index)
           return prev
         })
       }
@@ -370,9 +383,10 @@ export function ImageModal({
 
   function handleBackgroundPointerDown(e: React.PointerEvent) {
     if (!editing) return
+    setOpenClassPopup(null)
     const pos = getRelPos(e.nativeEvent)
     if (!pos) return
-    const box: CornerBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, classId: activeClassId }
+    const box: CornerBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, classId: lastUsedClassId }
     setBoxes((prev) => {
       setDragState({ mode: 'create', index: prev.length, startX: pos.x, startY: pos.y, origBox: box })
       return [...prev, box]
@@ -381,11 +395,14 @@ export function ImageModal({
 
   function setBoxClass(index: number, classId: number) {
     setBoxes((prev) => prev.map((b, i) => (i === index ? { ...b, classId } : b)))
+    setLastUsedClassId(classId)
+    setOpenClassPopup(null)
   }
 
   function handleBoxPointerDown(e: React.PointerEvent, index: number) {
     if (!editing) return
     e.stopPropagation()
+    setOpenClassPopup(null)
     const pos = getRelPos(e.nativeEvent)
     if (!pos) return
     setDragState({ mode: 'move', index, startX: pos.x, startY: pos.y, origBox: boxes[index] })
@@ -399,6 +416,10 @@ export function ImageModal({
   function deleteBox(index: number) {
     setBoxes((prev) => prev.filter((_, i) => i !== index))
     setHoveredIndex(null)
+    // reset total (bukan cuma kalau match index) — index box lain ikut
+    // bergeser setelah satu dihapus, gampang salah nunjuk popup ke box yang
+    // beda kalau dipertahankan
+    setOpenClassPopup(null)
   }
 
   async function handleSave() {
@@ -407,6 +428,7 @@ export function ImageModal({
     try {
       await api.saveBoxes(projectId, label, filename, boxes.map(toYolo))
       setEditing(false)
+      setOpenClassPopup(null)
       onSaved?.()
     } finally {
       setSaving(false)
@@ -415,6 +437,7 @@ export function ImageModal({
 
   async function handleCancelEdit() {
     setEditing(false)
+    setOpenClassPopup(null)
     if (!annotationUrl) {
       setBoxes([])
       return
@@ -544,32 +567,6 @@ export function ImageModal({
           </div>
         </div>
 
-        {editing && classNames.length > 1 && (
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-slate-500">Kelas untuk box baru:</span>
-            {classNames.map((name, i) => {
-              const color = classColor(i)
-              const active = activeClassId === i
-              return (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setActiveClassId(i)}
-                  className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium transition"
-                  style={{
-                    borderColor: color,
-                    backgroundColor: active ? hexToRgba(color, 0.22) : 'transparent',
-                    color,
-                  }}
-                >
-                  <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-                  {name}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
         <div ref={rowRef} className="relative flex min-h-0 flex-1 items-center justify-center">
           {hasPrev && !editing && (
             <button
@@ -651,6 +648,7 @@ export function ImageModal({
               const isActive = dragState?.index === i || hoveredIndex === i
               const color = classColor(box.classId)
               const canReassign = editing && classNames.length > 1
+              const popupOpen = canReassign && openClassPopup === i
               return (
                 <div
                   key={i}
@@ -676,24 +674,22 @@ export function ImageModal({
                     // kotak yang lagi dihover/di-drag naik ke depan — supaya kotak
                     // berdempetan/tumpang tindih tetap bisa dipilih satu-satu, bukan
                     // selalu kena kotak yang urutannya di atas
-                    zIndex: dragState?.index === i ? 50 : hoveredIndex === i ? 40 : i + 1,
+                    // popup pemilih kelas harus tampil di atas box lain juga,
+                    // bukan cuma box-nya sendiri — dorong ke depan selama popup-nya terbuka
+                    zIndex: dragState?.index === i ? 50 : popupOpen ? 45 : hoveredIndex === i ? 40 : i + 1,
                   }}
                 >
                   {canReassign ? (
-                    <select
+                    <button
+                      type="button"
                       onPointerDown={(e) => e.stopPropagation()}
-                      value={box.classId}
-                      onChange={(e) => setBoxClass(i, Number(e.target.value))}
-                      title="Ganti kelas box ini"
-                      className="absolute -top-6 left-0 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-950"
+                      onClick={() => setOpenClassPopup((cur) => (cur === i ? null : i))}
+                      title="Klik untuk ganti kelas / hapus box ini"
+                      className="absolute -top-5 left-0 rounded px-1 text-[10px] font-semibold text-slate-950"
                       style={{ backgroundColor: color }}
                     >
-                      {classNames.map((name, ci) => (
-                        <option key={ci} value={ci}>
-                          {name}
-                        </option>
-                      ))}
-                    </select>
+                      {classLabel(box.classId, classNames)}
+                    </button>
                   ) : (
                     <span
                       className="absolute -top-5 left-0 rounded px-1 text-[10px] font-semibold text-slate-950"
@@ -701,6 +697,54 @@ export function ImageModal({
                     >
                       {classLabel(box.classId, classNames)}
                     </span>
+                  )}
+                  {popupOpen && (
+                    // Popup "pilih kelas" menempel di box — gaya Roboflow: muncul
+                    // SETELAH box selesai digambar (dipicu dari onUp di atas) atau
+                    // saat label box yang sudah ada diklik, bukan strip pemilih
+                    // terpisah di atas gambar yang dipilih SEBELUM menggambar.
+                    // Gaya baris-nya SENGAJA disamakan dengan kartu "Daftar Kelas"
+                    // (ClassNamesEditor.tsx) — badge nomor index + border, bukan
+                    // titik warna kecil — biar satu bahasa visual, bukan dua
+                    // gaya list berbeda buat 1 konsep yang sama (kelas ke-i)
+                    <div
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="absolute left-[calc(100%+8px)] top-0 z-[60] w-48 rounded-lg border border-slate-800 bg-slate-950 p-3 shadow-xl"
+                    >
+                      <p className="mb-2 text-xs font-medium text-slate-400">Pilih Kelas</p>
+                      <ul className="mb-2 space-y-1">
+                        {classNames.map((name, ci) => {
+                          const selected = box.classId === ci
+                          const optColor = classColor(ci)
+                          return (
+                            <li key={ci}>
+                              <button
+                                type="button"
+                                onClick={() => setBoxClass(i, ci)}
+                                className="flex w-full items-center justify-between gap-2 rounded-lg border bg-slate-800 px-3 py-1.5 text-left text-sm text-slate-100 hover:bg-slate-700"
+                                style={{ borderColor: selected ? optColor : '#334155' }}
+                              >
+                                <span className="truncate">
+                                  <span className="mr-2 font-mono text-xs text-slate-500">{ci}</span>
+                                  {name}
+                                </span>
+                                {selected && (
+                                  <CheckIcon className="h-3.5 w-3.5 shrink-0" style={{ color: optColor }} />
+                                )}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                      <button
+                        type="button"
+                        onClick={() => deleteBox(i)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-900 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                        Hapus Box
+                      </button>
+                    </div>
                   )}
                   {editing && (
                     <>
