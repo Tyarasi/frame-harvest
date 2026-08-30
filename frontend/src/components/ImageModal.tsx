@@ -26,6 +26,16 @@ interface Props {
   onSaved?: () => void
   editable?: boolean
   deleteLabel?: string
+  // badge status generik (mis. "Benar"/"Salah" di TestEvaluation) — ikut
+  // mewarnai border gambar, sama seperti kartu thumbnail sebelum diklik
+  badge?: { text: string; tone: 'success' | 'danger' }
+  // badge di pojok kiri, terpisah dari `badge` di kanan — dipakai untuk
+  // info tambahan yang bukan status benar/salah (mis. nama label). Isi
+  // (ReactNode) boleh sudah membawa warnanya sendiri per-kata (lihat
+  // LabelBadgeContent di TestEvaluation.tsx); labelBadgeBg cuma warna latar
+  // pill-nya, default abu netral kalau tidak diisi.
+  labelBadge?: React.ReactNode
+  labelBadgeBg?: string
 }
 
 // Representasi internal saat mengedit: dua titik sudut, bukan pusat+ukuran —
@@ -100,6 +110,9 @@ export function ImageModal({
   onSaved,
   editable = true,
   deleteLabel = 'Hapus',
+  badge,
+  labelBadge,
+  labelBadgeBg = 'rgba(2, 6, 23, 0.8)',
 }: Props) {
   const [boxes, setBoxes] = useState<CornerBox[]>([])
   const [editing, setEditing] = useState(false)
@@ -531,7 +544,9 @@ export function ImageModal({
                 const { naturalWidth, naturalHeight } = e.currentTarget
                 setNaturalSize({ w: naturalWidth, h: naturalHeight })
               }}
-              className={`select-none rounded-lg border border-slate-800 object-contain ${
+              className={`select-none rounded-lg border object-contain ${
+                badge?.tone === 'danger' ? 'border-red-900' : 'border-slate-800'
+              } ${
                 !hasBboxOverlay && naturalSize && availableSize
                   ? 'h-full w-full'
                   : fullscreen
@@ -539,6 +554,25 @@ export function ImageModal({
                     : 'w-auto max-h-[85vh]'
               }`}
             />
+            {labelBadge && (
+              <span
+                style={{ backgroundColor: labelBadgeBg }}
+                className="absolute left-2 top-2 z-20 rounded px-2 py-1 text-xs font-medium"
+              >
+                {labelBadge}
+              </span>
+            )}
+            {badge && (
+              <span
+                className={`absolute right-2 top-2 z-20 rounded px-2 py-1 text-xs font-bold uppercase ${
+                  badge.tone === 'danger'
+                    ? 'bg-red-950/90 text-red-400'
+                    : 'bg-emerald-950/90 text-emerald-400'
+                }`}
+              >
+                {badge.text}
+              </span>
+            )}
             {boxes.map((box, i) => {
               const isActive = dragState?.index === i || hoveredIndex === i
               return (
