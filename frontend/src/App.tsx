@@ -1,44 +1,42 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, sanitizeLabel, type Camera, type Project, type Resolution, type StatusResponse } from './api'
-import { CameraSelector } from './components/CameraSelector'
-import { CaptureControls } from './components/CaptureControls'
-import { DatasetPreparation } from './components/DatasetPreparation'
-import { Gallery } from './components/Gallery'
-import { LivePreview } from './components/LivePreview'
-import { SettingsIcon } from './components/icons'
-import { ManageCameras } from './components/ManageCameras'
-import { ManageProjects } from './components/ManageProjects'
-import { Modal } from './components/Modal'
-import { StatusPanel } from './components/StatusPanel'
-import { TrainingPage } from './components/TrainingPage'
+import { api, sanitizeLabel, type Camera, type DatasetTarget, type Project, type Resolution, type StatusResponse } from './api'
+import { CameraSelector } from './components/cameras/CameraSelector'
+import { CaptureControls } from './components/cameras/CaptureControls'
+import { LivePreview } from './components/cameras/LivePreview'
+import { ManageCameras } from './components/cameras/ManageCameras'
+import { StatusPanel } from './components/cameras/StatusPanel'
+import { CleanupPanel } from './components/dataset-prep/CleanupPanel'
+import { PersiapanDatasetPhase } from './components/dataset-prep/PersiapanDatasetPhase'
+import { ManageProjects } from './components/projects/ManageProjects'
+import { PhaseStepper } from './components/projects/PhaseStepper'
+import { ProjectBar } from './components/projects/ProjectBar'
+import { TrainingPage } from './components/training/TrainingPage'
+import { Modal } from './components/ui/Modal'
 
 type Page = 'capture' | 'integration' | 'training'
 
-const PAGES: Page[] = ['capture', 'integration', 'training']
+const PHASES: Array<{ key: Page; label: string }> = [
+  { key: 'capture', label: 'Capture' },
+  { key: 'integration', label: 'Persiapan Dataset' },
+  { key: 'training', label: 'Training' },
+]
 
 // baca tab aktif dari URL (?page=...) supaya refresh browser tidak selalu
 // balik ke tab "Capture" — tab yang lagi dibuka ikut tersimpan di address bar
 function getInitialPage(): Page {
   const param = new URLSearchParams(window.location.search).get('page')
-  return (PAGES as string[]).includes(param ?? '') ? (param as Page) : 'capture'
+  return (PHASES.map((p) => p.key) as string[]).includes(param ?? '') ? (param as Page) : 'capture'
 }
 
-type CaptureTab = 'live' | 'gallery'
-
-const CAPTURE_TABS: Array<{ key: CaptureTab; label: string }> = [
-  { key: 'live', label: 'Live Capture' },
-  { key: 'gallery', label: 'Galeri' },
-]
-
-function getInitialCaptureTab(): CaptureTab {
-  const param = new URLSearchParams(window.location.search).get('captureTab')
-  const keys = CAPTURE_TABS.map((t) => t.key) as string[]
-  return keys.includes(param ?? '') ? (param as CaptureTab) : 'live'
+// project aktif ikut disimpan di URL (?project=...) juga — sebelumnya tidak,
+// jadi tiap refresh selalu balik ke project PERTAMA dari daftar backend
+// (urutan projects.yaml), bukan project yang terakhir dipilih user
+function getInitialProjectId(): string {
+  return new URLSearchParams(window.location.search).get('project') ?? ''
 }
 
 export default function App() {
   const [page, setPageState] = useState<Page>(getInitialPage)
-  const [captureTab, setCaptureTabState] = useState<CaptureTab>(getInitialCaptureTab)
 
   function setPage(next: Page) {
     setPageState(next)
@@ -47,16 +45,10 @@ export default function App() {
     window.history.replaceState({}, '', url)
   }
 
-  function setCaptureTab(next: CaptureTab) {
-    setCaptureTabState(next)
-    const url = new URL(window.location.href)
-    url.searchParams.set('captureTab', next)
-    window.history.replaceState({}, '', url)
-  }
   const [cameras, setCameras] = useState<Camera[]>([])
   const [selectedId, setSelectedId] = useState('')
   const [projects, setProjects] = useState<Project[]>([])
-  const [projectId, setProjectId] = useState('')
+  const [projectId, setProjectId] = useState(getInitialProjectId)
   const [label, setLabel] = useState('')
   const [resolution, setResolution] = useState('1280x720')
   const [intervalSec, setIntervalSec] = useState(5)
@@ -67,12 +59,18 @@ export default function App() {
   const [loaded, setLoaded] = useState(false)
   const [showManage, setShowManage] = useState(false)
   const [showManageProjects, setShowManageProjects] = useState(false)
+  const [showCleanup, setShowCleanup] = useState(false)
   const [togglingStream, setTogglingStream] = useState(false)
   const [captureTargets, setCaptureTargets] = useState<Set<string>>(new Set())
   const [focusLabel, setFocusLabel] = useState<string | null>(null)
+  // dipakai buat gating fase Training (harus ada minimal 1 label ter-assign
+  // dulu) di PhaseStepper — bukan buat konten, cuma existence check ringan
+  const [hasLabels, setHasLabels] = useState(false)
 
   const displayCameras = status?.cameras ?? cameras
   const runningIds = new Set(status?.interval_running ?? [])
+  const activeProject = projects.find((p) => p.id === projectId)
+  const totalFrames = Object.values(status?.counts ?? {}).reduce((a, b) => a + b, 0)
 
   // buang target yang kameranya sudah dihapus
   useEffect(() => {
@@ -109,6 +107,16 @@ export default function App() {
     return list
   }, [])
 
+  // sinkronkan project aktif ke URL tiap kali berubah — baik dari user pilih
+  // dropdown, maupun dari resolusi otomatis di reloadProjects (mis. project
+  // di URL sudah dihapus, fallback ke project pertama)
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (projectId) url.searchParams.set('project', projectId)
+    else url.searchParams.delete('project')
+    window.history.replaceState({}, '', url)
+  }, [projectId])
+
   const reloadProjects = useCallback(async (preferId?: string) => {
     const list = await api.listProjects()
     setProjects(list)
@@ -134,8 +142,8 @@ export default function App() {
     await reloadCameras()
   }
 
-  async function handleAddProject(name: string) {
-    const res = await api.addProject(name)
+  async function handleAddProject(name: string, datasetTarget: DatasetTarget) {
+    const res = await api.addProject(name, datasetTarget)
     await reloadProjects(res.id)
   }
 
@@ -166,6 +174,22 @@ export default function App() {
     const id = setInterval(refreshStatus, 3000)
     return () => clearInterval(id)
   }, [refreshStatus])
+
+  // existence check ringan buat gating fase Training — cukup tahu "ada
+  // minimal 1 label berisi gambar", bukan hitung total
+  const reloadHasLabels = useCallback(() => {
+    if (!projectId) return setHasLabels(false)
+    api
+      .listLabels(projectId)
+      .then((labels) => setHasLabels(labels.some((l) => l.count > 0)))
+      .catch(() => setHasLabels(false))
+  }, [projectId])
+
+  useEffect(() => {
+    reloadHasLabels()
+    const id = setInterval(reloadHasLabels, 5000)
+    return () => clearInterval(id)
+  }, [reloadHasLabels])
 
   const hasTargets = captureTargets.size > 0
 
@@ -244,86 +268,40 @@ export default function App() {
     }
   }
 
+  // Navigasi TINGKAT 1 (fase) — Persiapan Dataset butuh minimal 1 frame,
+  // Training butuh minimal 1 label ter-assign. TIDAK disembunyikan kalau
+  // belum bisa diakses — cuma dikunci + tooltip alasannya (lihat PhaseStepper).
+  function phaseDisabledReason(key: string): string | null {
+    if (key === 'integration' && totalFrames === 0) return 'Ambil gambar dulu di fase Capture'
+    if (key === 'training' && !hasLabels) return 'Label dataset dulu di fase Persiapan Dataset'
+    return null
+  }
+  function phaseCompleted(key: string): boolean {
+    if (key === 'capture') return totalFrames > 0
+    if (key === 'integration') return hasLabels
+    return false
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900/60">
-        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3 px-6 py-4 lg:px-10">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">Frame - Harvest - Hampir - Moon</h1>
-            <p className="text-xs text-slate-500">
-              Pengumpulan gambar dari stream RTSP untuk dataset training
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            {projects.length > 0 && (
-              <select
-                value={projectId}
-                onChange={(e) => setProjectId(e.target.value)}
-                className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs font-medium text-slate-100 focus:border-blue-500 focus:outline-none"
-              >
-                {projects.map((proj) => (
-                  <option key={proj.id} value={proj.id}>
-                    {proj.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            {projects.length > 0 && (
-              <button
-                onClick={() => setShowManageProjects(true)}
-                className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
-              >
-                <SettingsIcon className="h-3.5 w-3.5" />
-                Kelola Project
-              </button>
-            )}
-            {page === 'capture' && cameras.length > 0 && (
-              <button
-                onClick={() => setShowManage(true)}
-                className="flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 transition hover:bg-slate-800"
-              >
-                <SettingsIcon className="h-3.5 w-3.5" />
-                Kelola Kamera
-              </button>
-            )}
-          </div>
-        </div>
-        <div className="mx-auto flex max-w-[1600px] items-center gap-1 border-b border-slate-800 px-6 lg:px-10">
-          <button
-            type="button"
-            onClick={() => setPage('capture')}
-            className={`border-b-2 px-3 py-2.5 text-xs font-medium transition ${
-              page === 'capture'
-                ? 'border-blue-500 text-slate-100'
-                : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200'
-            }`}
-          >
-            Capture
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage('integration')}
-            className={`border-b-2 px-3 py-2.5 text-xs font-medium transition ${
-              page === 'integration'
-                ? 'border-blue-500 text-slate-100'
-                : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200'
-            }`}
-          >
-            Persiapan Dataset
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage('training')}
-            className={`border-b-2 px-3 py-2.5 text-xs font-medium transition ${
-              page === 'training'
-                ? 'border-blue-500 text-slate-100'
-                : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200'
-            }`}
-          >
-            Training
-          </button>
-        </div>
-      </header>
+      <ProjectBar
+        projects={projects}
+        projectId={projectId}
+        onSelectProject={setProjectId}
+        onManageProjects={() => setShowManageProjects(true)}
+        onManageCameras={projects.length > 0 && cameras.length > 0 ? () => setShowManage(true) : undefined}
+        onCleanupSample={projects.length > 0 ? () => setShowCleanup(true) : undefined}
+      />
+
+      {projects.length > 0 && cameras.length > 0 && (
+        <PhaseStepper
+          phases={PHASES}
+          active={page}
+          isCompleted={phaseCompleted}
+          disabledReason={phaseDisabledReason}
+          onSelect={(key) => setPage(key as Page)}
+        />
+      )}
 
       <main className="mx-auto max-w-[1600px] px-6 py-8 lg:px-10">
         {!loaded ? (
@@ -340,112 +318,74 @@ export default function App() {
           </div>
         ) : cameras.length === 0 ? (
           <div className="mx-auto max-w-md pt-12">
-            <ManageCameras
-              cameras={cameras}
-              onAdd={handleAddCamera}
-              onDelete={handleDeleteCamera}
-            />
+            <ManageCameras cameras={cameras} onAdd={handleAddCamera} onDelete={handleDeleteCamera} />
           </div>
         ) : page === 'integration' ? (
-          <DatasetPreparation
+          <PersiapanDatasetPhase
             projectId={projectId}
-            projectName={projects.find((p) => p.id === projectId)?.name ?? ''}
+            projectName={activeProject?.name ?? ''}
+            datasetTarget={activeProject?.dataset_target ?? 'resnet'}
+            cameras={cameras}
             counts={status?.counts ?? {}}
+            focusLabel={focusLabel}
+            onResetAll={refreshStatus}
           />
         ) : page === 'training' ? (
           <TrainingPage
             projectId={projectId}
-            projectName={projects.find((p) => p.id === projectId)?.name ?? ''}
+            projectName={activeProject?.name ?? ''}
+            datasetTarget={activeProject?.dataset_target ?? 'resnet'}
           />
         ) : (
           <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Capture
-              </h3>
-              <span className="rounded-full border border-blue-900 bg-blue-950/40 px-3 py-1 text-xs font-medium text-blue-300">
-                Project aktif: {projects.find((p) => p.id === projectId)?.name || '(tidak ada)'}
-              </span>
-            </div>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Capture</h3>
+            <p className="mb-4 text-[11px] text-slate-600">{activeProject?.name} / Live Capture</p>
 
-            <div className="mb-5 flex flex-wrap gap-1 border-b border-slate-800">
-              {CAPTURE_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => setCaptureTab(t.key)}
-                  className={`border-b-2 px-3 py-2.5 text-xs font-medium transition ${
-                    captureTab === t.key
-                      ? 'border-blue-500 text-slate-100'
-                      : 'border-transparent text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <div className="space-y-4 lg:col-span-2">
+                <CameraSelector
+                  cameras={displayCameras}
+                  selectedId={selectedId}
+                  onSelect={setSelectedId}
+                  onToggleStream={handleToggleStream}
+                  toggling={togglingStream}
+                />
 
-            {captureTab === 'live' ? (
-              <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                <div className="space-y-4 lg:col-span-2">
-                  <CameraSelector
-                    cameras={displayCameras}
-                    selectedId={selectedId}
-                    onSelect={setSelectedId}
-                    onToggleStream={handleToggleStream}
-                    toggling={togglingStream}
-                  />
+                <LivePreview
+                  streamUrl={api.streamUrl(selectedId)}
+                  cameraId={selectedId}
+                  active={streamActive}
+                />
 
-                  <LivePreview
-                    streamUrl={api.streamUrl(selectedId)}
-                    cameraId={selectedId}
-                    active={streamActive}
-                  />
-
-                  {error && (
-                    <div className="rounded-lg bg-red-950 px-3 py-2 text-sm text-red-400">
-                      {error}
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-4">
-                  <CaptureControls
-                    cameras={displayCameras}
-                    targets={captureTargets}
-                    onToggleTarget={toggleCaptureTarget}
-                    runningIds={runningIds}
-                    hasTargets={hasTargets}
-                    label={label}
-                    onLabelChange={setLabel}
-                    existingLabels={Object.keys(status?.counts ?? {})}
-                    onDeleteSample={handleDeleteSample}
-                    onCapture={handleCapture}
-                    capturing={capturing}
-                    resolution={resolution}
-                    onResolutionChange={setResolution}
-                    intervalSec={intervalSec}
-                    onIntervalSecChange={setIntervalSec}
-                    intervalRunning={intervalRunning}
-                    onToggleInterval={handleToggleInterval}
-                  />
-
-                  <StatusPanel
-                    cameras={displayCameras}
-                    counts={status?.counts ?? {}}
-                    lastSaved={lastSaved}
-                  />
-                </div>
+                {error && (
+                  <div className="rounded-lg bg-red-950 px-3 py-2 text-sm text-red-400">{error}</div>
+                )}
               </div>
-            ) : (
-              <Gallery
-                projectId={projectId}
-                cameras={cameras}
-                counts={status?.counts ?? {}}
-                focusLabel={focusLabel}
-                onResetAll={refreshStatus}
-              />
-            )}
+
+              <div className="space-y-4">
+                <CaptureControls
+                  cameras={displayCameras}
+                  targets={captureTargets}
+                  onToggleTarget={toggleCaptureTarget}
+                  runningIds={runningIds}
+                  hasTargets={hasTargets}
+                  label={label}
+                  onLabelChange={setLabel}
+                  existingLabels={Object.keys(status?.counts ?? {})}
+                  onDeleteSample={handleDeleteSample}
+                  onCapture={handleCapture}
+                  capturing={capturing}
+                  resolution={resolution}
+                  onResolutionChange={setResolution}
+                  intervalSec={intervalSec}
+                  onIntervalSecChange={setIntervalSec}
+                  intervalRunning={intervalRunning}
+                  onToggleInterval={handleToggleInterval}
+                />
+
+                <StatusPanel cameras={displayCameras} counts={status?.counts ?? {}} lastSaved={lastSaved} />
+              </div>
+            </div>
           </div>
         )}
       </main>
@@ -470,6 +410,17 @@ export default function App() {
             onAdd={handleAddCamera}
             onDelete={handleDeleteCamera}
             onDone={() => setShowManage(false)}
+          />
+        </Modal>
+      )}
+
+      {showCleanup && (
+        <Modal onClose={() => setShowCleanup(false)}>
+          <CleanupPanel
+            projectId={projectId}
+            projectName={activeProject?.name ?? ''}
+            onCleaned={refreshStatus}
+            onDone={() => setShowCleanup(false)}
           />
         </Modal>
       )}

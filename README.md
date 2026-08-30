@@ -251,7 +251,10 @@ UI.
 ```
 frame-harvest/
 ├── backend/                      # semua kode & data server — lihat "Setup"
-│   ├── app.py                     # entrypoint FastAPI (`uvicorn app:app`) + semua route
+│   ├── app.py                     # entrypoint FastAPI (`uvicorn app:app`) — cuma app + include_router
+│   ├── state.py                   # singleton (camera_manager, project_manager) & helper lintas router
+│   ├── routers/                   # 1 file per domain endpoint — projects, cameras, capture,
+│   │                               # labels, split, dataset_prep, training_resnet, training_yolo, streaming
 │   ├── services/                  # logika inti, satu modul per tanggung jawab
 │   │   ├── camera_manager.py       # koneksi RTSP per kamera (thread background)
 │   │   ├── capture_manager.py      # simpan frame ke sample/, interval capture
@@ -298,6 +301,15 @@ frame-harvest/
 │           │   └── best_model.pt
 │           └── training_config.json
 └── frontend/                     # kode React/Vite — lihat "Mode pengembangan frontend"
+    └── src/
+        ├── api/                   # request API, 1 file per domain (sama dengan routers/ di atas),
+        │                           # digabung jadi 1 object `api` lewat api/index.ts
+        └── components/
+            ├── ui/                 # komponen generik lintas-fitur (Modal, ActionBadge, icons, dst.)
+            ├── cameras/            # kamera & live capture
+            ├── projects/           # switcher/pengaturan project, navigasi fase
+            ├── dataset-prep/       # fase Persiapan Dataset (kedua resep)
+            └── training/           # fase Training (kedua resep)
 ```
 
 `sample/<project>/` = data mentah per batch capture (bukan label klasifikasi).

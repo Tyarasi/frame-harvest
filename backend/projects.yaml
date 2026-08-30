@@ -5,3 +5,6 @@ projects:
 - id: karyawan-lanyardv2
   name: Karyawan-Lanyardv2
   dataset_target: resnet
+- id: test
+  name: Test
+  dataset_target: yolo
