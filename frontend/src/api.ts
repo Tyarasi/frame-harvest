@@ -46,6 +46,10 @@ export interface YoloBox {
   y: number
   w: number
   h: number
+  // index kelas (0-based) — dulu selalu tersirat 0 ("person"), sekarang
+  // project YOLO bisa punya banyak kelas. Opsional: default 0 di backend,
+  // aman buat resep ResNet yang memang cuma 1 kelas implisit.
+  class_id?: number
 }
 
 export interface AnnotateResult {
@@ -113,7 +117,7 @@ export interface DatasetPrepConfig {
   swipe_left_label: string
   swipe_right_label: string
   retention_days: number
-  yolo_class_name: string
+  yolo_class_names: string[]
 }
 
 export interface CleanupPreview {
@@ -578,7 +582,7 @@ export const api = {
     trainRatio: number,
     valRatio: number,
     testRatio: number,
-    className: string,
+    classNames: string[],
     seed = 42,
   ) =>
     request<YoloSplitSummary>(`${p(projectId)}/yolo-split`, {
@@ -589,7 +593,7 @@ export const api = {
         val_ratio: valRatio,
         test_ratio: testRatio,
         seed,
-        class_name: className,
+        class_names: classNames,
       }),
     }),
 

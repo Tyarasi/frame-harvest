@@ -36,18 +36,51 @@ interface Props {
   // pill-nya, default abu netral kalau tidak diisi.
   labelBadge?: React.ReactNode
   labelBadgeBg?: string
+  // nama kelas untuk bbox — index array = class_id di file .txt YOLO. Default
+  // 1 kelas "person" (cocok untuk resep ResNet yang memang cuma 1 kelas
+  // implisit); resep YOLO mengirim daftar kelas asli project (bisa > 1).
+  classNames?: string[]
 }
 
 // Representasi internal saat mengedit: dua titik sudut, bukan pusat+ukuran —
 // jauh lebih gampang dipakai untuk hitung drag/resize dibanding format YOLO.
+// classId ikut disimpan di sini (bukan cuma saat konversi ke/dari YOLO) supaya
+// box yang baru dibuat langsung "tahu" kelasnya dari awal drag.
 interface CornerBox {
   x1: number
   y1: number
   x2: number
   y2: number
+  classId: number
 }
 
 const MIN_SIZE = 0.01
+
+// Slot 1, 2, 3, 4, 5, 7 dari palet kategorikal skill dataviz (biru, oranye,
+// aqua, kuning, magenta, ungu) — sengaja LEWATI slot hijau & merah supaya
+// tidak bentrok makna dengan konvensi "Benar" (hijau)/"Salah" (merah) yang
+// sudah dipakai di tempat lain (mis. EvaluationResults.tsx, badge box aktif
+// sebelumnya). Kalau kelasnya lebih dari 6, warna berulang (modulo) — bukan
+// generate hue baru, sesuai aturan "jangan pernah cycle warna kategorikal
+// otomatis" tapi di sini itu adalah pilihan sadar untuk kasus ekstrem, bukan
+// default.
+const CLASS_HUES = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#9085e9']
+
+function classColor(classId: number): string {
+  return CLASS_HUES[((classId % CLASS_HUES.length) + CLASS_HUES.length) % CLASS_HUES.length]
+}
+
+function classLabel(classId: number, classNames: string[]): string {
+  return classNames[classId] ?? `Kelas ${classId}`
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
 
 function toYolo(box: CornerBox): YoloBox {
   return {
@@ -55,6 +88,7 @@ function toYolo(box: CornerBox): YoloBox {
     y: (box.y1 + box.y2) / 2,
     w: box.x2 - box.x1,
     h: box.y2 - box.y1,
+    class_id: box.classId,
   }
 }
 
@@ -64,6 +98,7 @@ function fromYolo(box: YoloBox): CornerBox {
     y1: box.y - box.h / 2,
     x2: box.x + box.w / 2,
     y2: box.y + box.h / 2,
+    classId: box.class_id ?? 0,
   }
 }
 
@@ -73,8 +108,8 @@ function parseYoloText(text: string): CornerBox[] {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [, x, y, w, h] = line.trim().split(/\s+/).map(Number)
-      return { x, y, w, h }
+      const [cls, x, y, w, h] = line.trim().split(/\s+/).map(Number)
+      return { class_id: Number.isFinite(cls) ? cls : 0, x, y, w, h }
     })
     .filter((b) => [b.x, b.y, b.w, b.h].every((n) => Number.isFinite(n)))
     .map(fromYolo)
@@ -113,10 +148,15 @@ export function ImageModal({
   badge,
   labelBadge,
   labelBadgeBg = 'rgba(2, 6, 23, 0.8)',
+  classNames = ['person'],
 }: Props) {
   const [boxes, setBoxes] = useState<CornerBox[]>([])
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
+  // kelas yang dipakai untuk box BARU yang mau digambar — cuma relevan kalau
+  // project ini punya lebih dari 1 kelas (resep YOLO multi-kelas); resep 1
+  // kelas tidak pernah menampilkan pemilihnya jadi ini selalu 0
+  const [activeClassId, setActiveClassId] = useState(0)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
@@ -285,13 +325,14 @@ export function ImageModal({
           const h = origBox.y2 - origBox.y1
           const x1 = Math.min(Math.max(origBox.x1 + (pos.x - startX), 0), 1 - w)
           const y1 = Math.min(Math.max(origBox.y1 + (pos.y - startY), 0), 1 - h)
-          next[index] = { x1, y1, x2: x1 + w, y2: y1 + h }
+          next[index] = { x1, y1, x2: x1 + w, y2: y1 + h, classId: origBox.classId }
         } else if (mode === 'resize') {
           next[index] = {
             x1: origBox.x1,
             y1: origBox.y1,
             x2: Math.max(pos.x, origBox.x1 + MIN_SIZE),
             y2: Math.max(pos.y, origBox.y1 + MIN_SIZE),
+            classId: origBox.classId,
           }
         } else if (mode === 'create') {
           next[index] = {
@@ -299,6 +340,7 @@ export function ImageModal({
             y1: Math.min(startY, pos.y),
             x2: Math.max(startX, pos.x),
             y2: Math.max(startY, pos.y),
+            classId: origBox.classId,
           }
         }
         return next
@@ -330,11 +372,15 @@ export function ImageModal({
     if (!editing) return
     const pos = getRelPos(e.nativeEvent)
     if (!pos) return
-    const box = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y }
+    const box: CornerBox = { x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, classId: activeClassId }
     setBoxes((prev) => {
       setDragState({ mode: 'create', index: prev.length, startX: pos.x, startY: pos.y, origBox: box })
       return [...prev, box]
     })
+  }
+
+  function setBoxClass(index: number, classId: number) {
+    setBoxes((prev) => prev.map((b, i) => (i === index ? { ...b, classId } : b)))
   }
 
   function handleBoxPointerDown(e: React.PointerEvent, index: number) {
@@ -393,9 +439,7 @@ export function ImageModal({
         <div className="flex items-center justify-between gap-3 text-sm text-slate-300">
           <span>
             {caption}
-            {boxes.length > 0 && (
-              <span className="ml-2 text-emerald-400">· {boxes.length} bbox person</span>
-            )}
+            {boxes.length > 0 && <span className="ml-2 text-emerald-400">· {boxes.length} bbox</span>}
           </span>
           <div className="flex shrink-0 gap-2">
             <button
@@ -500,6 +544,32 @@ export function ImageModal({
           </div>
         </div>
 
+        {editing && classNames.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-slate-500">Kelas untuk box baru:</span>
+            {classNames.map((name, i) => {
+              const color = classColor(i)
+              const active = activeClassId === i
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setActiveClassId(i)}
+                  className="flex items-center gap-1.5 rounded-full border px-2 py-0.5 font-medium transition"
+                  style={{
+                    borderColor: color,
+                    backgroundColor: active ? hexToRgba(color, 0.22) : 'transparent',
+                    color,
+                  }}
+                >
+                  <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                  {name}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
         <div ref={rowRef} className="relative flex min-h-0 flex-1 items-center justify-center">
           {hasPrev && !editing && (
             <button
@@ -579,6 +649,8 @@ export function ImageModal({
             )}
             {boxes.map((box, i) => {
               const isActive = dragState?.index === i || hoveredIndex === i
+              const color = classColor(box.classId)
+              const canReassign = editing && classNames.length > 1
               return (
                 <div
                   key={i}
@@ -587,27 +659,49 @@ export function ImageModal({
                   onPointerLeave={() =>
                     editing && setHoveredIndex((h) => (h === i ? null : h))
                   }
-                  className={`absolute border-2 shadow-[0_0_0_1px_rgba(0,0,0,0.6)] ${
-                    isActive ? 'border-amber-400' : 'border-emerald-400'
-                  } ${editing ? 'cursor-move' : 'pointer-events-none'}`}
+                  className={`absolute border-2 ${editing ? 'cursor-move' : 'pointer-events-none'}`}
                   style={{
                     left: `${box.x1 * 100}%`,
                     top: `${box.y1 * 100}%`,
                     width: `${(box.x2 - box.x1) * 100}%`,
                     height: `${(box.y2 - box.y1) * 100}%`,
+                    borderColor: color,
+                    // status aktif (hover/drag) sekarang ditandai cincin putih di
+                    // LUAR border, bukan ganti warna border — warna border harus
+                    // tetap identitas kelasnya, tidak boleh "hilang" jadi kuning
+                    // pas dihover
+                    boxShadow: isActive
+                      ? '0 0 0 2px rgba(255,255,255,0.85), 0 0 0 1px rgba(0,0,0,0.6)'
+                      : '0 0 0 1px rgba(0,0,0,0.6)',
                     // kotak yang lagi dihover/di-drag naik ke depan — supaya kotak
                     // berdempetan/tumpang tindih tetap bisa dipilih satu-satu, bukan
                     // selalu kena kotak yang urutannya di atas
                     zIndex: dragState?.index === i ? 50 : hoveredIndex === i ? 40 : i + 1,
                   }}
                 >
-                  <span
-                    className={`absolute -top-5 left-0 rounded px-1 text-[10px] font-semibold text-slate-950 ${
-                      isActive ? 'bg-amber-400' : 'bg-emerald-400'
-                    }`}
-                  >
-                    person
-                  </span>
+                  {canReassign ? (
+                    <select
+                      onPointerDown={(e) => e.stopPropagation()}
+                      value={box.classId}
+                      onChange={(e) => setBoxClass(i, Number(e.target.value))}
+                      title="Ganti kelas box ini"
+                      className="absolute -top-6 left-0 rounded px-1 py-0.5 text-[10px] font-semibold text-slate-950"
+                      style={{ backgroundColor: color }}
+                    >
+                      {classNames.map((name, ci) => (
+                        <option key={ci} value={ci}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span
+                      className="absolute -top-5 left-0 rounded px-1 text-[10px] font-semibold text-slate-950"
+                      style={{ backgroundColor: color }}
+                    >
+                      {classLabel(box.classId, classNames)}
+                    </span>
+                  )}
                   {editing && (
                     <>
                       <button
@@ -621,7 +715,7 @@ export function ImageModal({
                       </button>
                       <div
                         onPointerDown={(e) => handleResizePointerDown(e, i)}
-                        className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-slate-950 bg-emerald-400"
+                        className="absolute -bottom-1.5 -right-1.5 h-3.5 w-3.5 cursor-nwse-resize rounded-full border-2 border-slate-950 bg-white"
                       />
                     </>
                   )}
