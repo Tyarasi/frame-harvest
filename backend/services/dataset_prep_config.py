@@ -16,6 +16,11 @@ DEFAULT_CONFIG = {
     # dipakai isi default form-nya, PENGHAPUSAN NYATA tetap selalu manual
     # lewat tombol + konfirmasi, tidak pernah otomatis dari nilai ini saja
     "retention_days": 14.0,
+    # nama kelas buat resep YOLO (data.yaml) — cuma disimpan di sini supaya
+    # tidak perlu diketik ulang tiap buka Split Dataset; nilai yang BENAR-
+    # BENAR dipakai saat generate split selalu dikirim eksplisit lewat
+    # body request /yolo-split, bukan dibaca ulang dari sini oleh backend
+    "yolo_class_name": "object",
 }
 
 CONFIG_FILENAME = "dataset_prep_config.json"
