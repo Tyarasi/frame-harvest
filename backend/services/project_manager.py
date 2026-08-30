@@ -22,7 +22,13 @@ class ProjectManager:
             return []
         with open(self.registry_path) as f:
             data = yaml.safe_load(f) or {}
-        return data.get("projects", [])
+        projects = data.get("projects", [])
+        # project lama (dibuat sebelum field ini ada) belum punya dataset_target
+        # di projects.yaml — isi default "resnet" biar frontend tidak dapat
+        # undefined, TANPA menulis ulang file (cuma dilengkapi saat dibaca)
+        for p in projects:
+            p.setdefault("dataset_target", "resnet")
+        return projects
 
     def _save(self, projects: list[dict]) -> None:
         with open(self.registry_path, "w") as f:
@@ -34,7 +40,13 @@ class ProjectManager:
     def exists(self, project_id: str) -> bool:
         return any(p["id"] == project_id for p in self._load())
 
-    def add_project(self, name: str) -> dict:
+    def add_project(self, name: str, dataset_target: str = "resnet") -> dict:
+        """`dataset_target` menentukan "resep" persiapan dataset yang dipakai
+        project ini (lihat recipes.ts di frontend) — mis. resnet: BBox->Crop->
+        Label->Split, nanti yolo: BBox->Split langsung. Sengaja TIDAK ada
+        endpoint untuk mengubahnya setelah dibuat: sama seperti id project,
+        nilai ini dikunci dari awal supaya tidak ada project yang navigasi
+        alurnya berubah di tengah jalan setelah sudah mulai punya data."""
         name = name.strip()
         projects = self._load()
         base_id = self._slugify(name)
@@ -45,7 +57,7 @@ class ProjectManager:
             project_id = f"{base_id}-{n}"
             n += 1
 
-        project = {"id": project_id, "name": name}
+        project = {"id": project_id, "name": name, "dataset_target": dataset_target}
         projects.append(project)
         self._save(projects)
         self.project_dir(project_id).mkdir(parents=True, exist_ok=True)

@@ -1,3 +1,7 @@
 projects:
 - id: karyawan-lanyard
   name: Karyawan Lanyard
+  dataset_target: resnet
+- id: karyawan-lanyardv2
+  name: Karyawan-Lanyardv2
+  dataset_target: resnet
