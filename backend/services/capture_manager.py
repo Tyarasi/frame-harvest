@@ -202,6 +202,63 @@ class CaptureManager:
         shutil.rmtree(target_dir)
         return True
 
+    def _cleanup_candidates(self, older_than_days: float) -> list[Path]:
+        """Frame di sample/<label>/*.jpg yang (a) lebih tua dari
+        older_than_days DAN (b) SUDAH PERNAH di-crop (ada minimal 1 file di
+        crops/ yang berasal darinya) — dua-duanya harus benar. Frame yang
+        belum pernah di-crop TIDAK PERNAH masuk kandidat apapun umurnya,
+        karena itu satu-satunya salinan datanya (crop belum menyelamatkan
+        apa-apa dari frame itu)."""
+        if not self.sample_dir.exists():
+            return []
+        cutoff = time.time() - older_than_days * 86400
+        candidates: list[Path] = []
+        for label_dir in self.sample_dir.iterdir():
+            if not label_dir.is_dir():
+                continue
+            crops_dir = label_dir / CROPS_DIRNAME
+            cropped_stems: set[str] = set()
+            if crops_dir.exists():
+                cropped_stems = {re.sub(r"_p\d+$", "", f.stem) for f in crops_dir.glob("*.jpg")}
+            for img_path in label_dir.glob("*.jpg"):
+                if img_path.stat().st_mtime > cutoff:
+                    continue
+                if img_path.stem not in cropped_stems:
+                    continue
+                candidates.append(img_path)
+        return candidates
+
+    def preview_cleanup(self, older_than_days: float) -> dict:
+        """Hitung SAJA — tidak menghapus apapun. Dipakai UI untuk tampilkan
+        pratinjau (berapa file, berapa MB, per sample) sebelum user klik
+        konfirmasi hapus sungguhan lewat run_cleanup()."""
+        candidates = self._cleanup_candidates(older_than_days)
+        by_label: dict[str, int] = {}
+        for p in candidates:
+            by_label[p.parent.name] = by_label.get(p.parent.name, 0) + 1
+        return {
+            "count": len(candidates),
+            "total_bytes": sum(p.stat().st_size for p in candidates),
+            "by_label": by_label,
+        }
+
+    def run_cleanup(self, older_than_days: float) -> dict:
+        """Hapus sungguhan kandidat yang sama persis dengan preview_cleanup()
+        — dipanggil HANYA setelah user klik tombol + konfirmasi di UI, tidak
+        pernah otomatis dari backend sendiri. Ikut hapus file .txt bbox
+        pasangannya (kalau ada) supaya tidak ada .txt yatim tersisa."""
+        candidates = self._cleanup_candidates(older_than_days)
+        deleted = 0
+        freed_bytes = 0
+        for img_path in candidates:
+            freed_bytes += img_path.stat().st_size
+            img_path.unlink()
+            txt_path = img_path.with_suffix(".txt")
+            if txt_path.is_file():
+                txt_path.unlink()
+            deleted += 1
+        return {"deleted": deleted, "freed_bytes": freed_bytes}
+
     def count_by_label(self) -> dict[str, int]:
         counts = {}
         if not self.sample_dir.exists():
