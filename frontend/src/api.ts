@@ -5,9 +5,15 @@ export interface Camera {
   active: boolean
 }
 
+// resep persiapan dataset yang dipakai project ini — lihat recipes.ts.
+// Baru "resnet" yang beneran didukung; nilai lain nanti (mis. "yolo") akan
+// mengarahkan UI Persiapan Dataset ke rangkaian langkah yang berbeda.
+export type DatasetTarget = 'resnet' | 'yolo'
+
 export interface Project {
   id: string
   name: string
+  dataset_target: DatasetTarget
 }
 
 export interface DatasetImage {
@@ -65,6 +71,12 @@ export interface CropImage {
   size_bytes: number
 }
 
+export interface CropTopResult {
+  total_source: number
+  processed: number
+  skipped: number
+}
+
 export interface LabelInfo {
   name: string
   count: number
@@ -92,6 +104,29 @@ export interface TrainingConfig {
   freeze_backbone: boolean
 }
 
+export interface DatasetPrepConfig {
+  top_crop_percent: number
+  use_top_crops: boolean
+  selected_sample: string
+  label_mode: 'grid' | 'swipe'
+  label_name: string
+  swipe_left_label: string
+  swipe_right_label: string
+  retention_days: number
+  yolo_class_name: string
+}
+
+export interface CleanupPreview {
+  count: number
+  total_bytes: number
+  by_label: Record<string, number>
+}
+
+export interface CleanupResult {
+  deleted: number
+  freed_bytes: number
+}
+
 export interface TrainingMetricPoint {
   epoch: number
   loss: number
@@ -99,6 +134,47 @@ export interface TrainingMetricPoint {
   precision: number
   recall: number
   f1: number
+}
+
+// ---- Resep YOLO — bentuk data beda dari classifier ResNet di atas ----
+
+export interface YoloSplitSummary {
+  train: number
+  val: number
+  test: number
+}
+
+export interface YoloTrainingConfig {
+  epochs: number
+  batch_size: number
+  imgsz: number
+}
+
+export interface YoloMetricPoint {
+  epoch: number
+  box_loss: number
+  cls_loss: number
+  dfl_loss: number
+  precision: number
+  recall: number
+  map50: number
+  map50_95: number
+}
+
+export interface YoloTrainingStatus {
+  status: 'idle' | 'running' | 'finished' | 'stopped' | 'error'
+  epoch: number
+  total_epochs: number
+  history: YoloMetricPoint[]
+  error: string | null
+}
+
+export interface YoloEvalResult {
+  num_images: number
+  precision: number
+  recall: number
+  map50: number
+  map50_95: number
 }
 
 export interface TrainingStatus {
@@ -110,6 +186,14 @@ export interface TrainingStatus {
   simulated: boolean
 }
 
+export interface TestPrediction {
+  path: string
+  true_label: string
+  predicted_label: string
+  correct: boolean
+  confidence: number
+}
+
 export interface TestEvalResult {
   num_images: number
   class_names: string[]
@@ -117,6 +201,7 @@ export interface TestEvalResult {
   precision: number
   recall: number
   f1: number
+  predictions: TestPrediction[]
 }
 
 // Cermin dari CaptureManager._safe_name() di backend — dipakai untuk menebak
@@ -157,11 +242,11 @@ export const api = {
   // ---- Project (dataset terpisah — kamera tetap global, lihat di bawah) ----
   listProjects: () => request<Project[]>('/api/projects'),
 
-  addProject: (name: string) =>
+  addProject: (name: string, datasetTarget: DatasetTarget = 'resnet') =>
     request<Project>('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, dataset_target: datasetTarget }),
     }),
 
   renameProject: (projectId: string, name: string) =>
@@ -263,6 +348,11 @@ export const api = {
   labelImageUrl: (projectId: string, path: string) =>
     `/projects/${encodeURIComponent(projectId)}/dataset/${path}`,
 
+  // gambar split/test/<label>/<filename>.jpg — dipakai galeri prediksi di
+  // TestEvaluation, path sudah relatif terhadap split/test dari backend
+  splitTestImageUrl: (projectId: string, path: string) =>
+    `/projects/${encodeURIComponent(projectId)}/split/test/${path}`,
+
   // file label YOLO ("<nama_file>.txt") disimpan di sebelah "<nama_file>.jpg"
   // yang sama — lihat person_annotator.py di backend
   annotationUrl: (projectId: string, path: string) =>
@@ -326,8 +416,35 @@ export const api = {
       `${p(projectId)}/sample/crops?limit=${limit}&exclude_assigned=${excludeAssigned}`,
     ),
 
+  // crop bagian atas (mis. 25% teratas) dari crop full-body yang sudah ada —
+  // dipakai fokus klasifikasi ke area tertentu (mis. leher/dada tempat
+  // lanyard biasa terlihat), tanpa hitung ulang bbox dari frame asli
+  cropTopObjects: (projectId: string, label: string, percent: number, overwrite = false) =>
+    request<CropTopResult>(`${p(projectId)}/sample/${encodeURIComponent(label)}/crop-top-objects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ percent, overwrite }),
+    }),
+
+  listTopCrops: (projectId: string, label: string, limit = 5000, excludeAssigned = false) =>
+    request<CropImage[]>(
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/crops-top?limit=${limit}&exclude_assigned=${excludeAssigned}`,
+    ),
+
   resetAllSamples: (projectId: string) =>
     request<{ deleted: number }>(`${p(projectId)}/sample/reset`, { method: 'POST' }),
+
+  // "Bersihkan Sample Lama" — HANYA menghitung/preview, tidak menghapus
+  previewCleanup: (projectId: string, olderThanDays: number) =>
+    request<CleanupPreview>(`${p(projectId)}/sample/cleanup-preview?older_than_days=${olderThanDays}`),
+
+  // eksekusi hapus sungguhan — panggil ini CUMA setelah user konfirmasi
+  runCleanup: (projectId: string, olderThanDays: number) =>
+    request<CleanupResult>(`${p(projectId)}/sample/cleanup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ older_than_days: olderThanDays }),
+    }),
 
   deleteSample: (projectId: string, label: string) =>
     request<{ deleted: string }>(`${p(projectId)}/sample/${encodeURIComponent(label)}`, {
@@ -347,11 +464,17 @@ export const api = {
   // ---- Label (dataset klasifikasi hasil assign, per-project) ----
   listLabels: (projectId: string) => request<LabelInfo[]>(`${p(projectId)}/labels`),
 
-  assignLabel: (projectId: string, label: string, sample: string, filenames: string[]) =>
+  assignLabel: (
+    projectId: string,
+    label: string,
+    sample: string,
+    filenames: string[],
+    source: 'crops' | 'crops_top' = 'crops',
+  ) =>
     request<{ assigned: number }>(`${p(projectId)}/labels/${encodeURIComponent(label)}/assign`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sample, filenames }),
+      body: JSON.stringify({ sample, filenames, source }),
     }),
 
   listLabelImages: (projectId: string, label: string, limit = 5000) =>
@@ -390,12 +513,32 @@ export const api = {
 
   getSplit: (projectId: string) => request<SplitSummary>(`${p(projectId)}/split`),
 
+  // URL unduhan .zip (bukan lewat request() — ini file binary, bukan JSON;
+  // browser cukup diarahkan langsung ke URL ini, Content-Disposition di
+  // backend yang memicu download-nya)
+  splitExportUrl: (projectId: string) => `${p(projectId)}/split/export`,
+
   // ---- Training setup (per-project) ----
   getTrainingConfig: (projectId: string) =>
     request<TrainingConfig>(`${p(projectId)}/training-config`),
 
   saveTrainingConfig: (projectId: string, config: TrainingConfig) =>
     request<TrainingConfig>(`${p(projectId)}/training-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }),
+
+  // ---- Persiapan Dataset config (per-project) — mis. persentase crop atas ----
+  getDatasetPrepConfig: (projectId: string) =>
+    request<DatasetPrepConfig>(`${p(projectId)}/dataset-prep-config`),
+
+  // Partial<> dengan sengaja — endpoint ini sekarang ditulis dari 2 tempat
+  // independen (setup Persiapan Dataset & panel "Bersihkan Sample Lama" di
+  // menu Pengaturan). Kirim CUMA field yang benar-benar berubah; backend
+  // merge ke file yang sudah tersimpan, field lain tidak ikut ketiban.
+  saveDatasetPrepConfig: (projectId: string, config: Partial<DatasetPrepConfig>) =>
+    request<DatasetPrepConfig>(`${p(projectId)}/dataset-prep-config`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(config),
@@ -415,4 +558,62 @@ export const api = {
 
   evaluateTestSet: (projectId: string) =>
     request<TestEvalResult>(`${p(projectId)}/training/evaluate-test`, { method: 'POST' }),
+
+  // upload 1 file .pt manual (mis. hasil training di mesin lain), dievaluasi
+  // terhadap split/test project ini — TIDAK PERNAH menimpa best_model.pt
+  // project. FormData sengaja TANPA header Content-Type manual — browser
+  // yang isi boundary multipart-nya sendiri, kalau di-set manual malah rusak.
+  evaluateUploadedModel: (projectId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<TestEvalResult>(`${p(projectId)}/training/evaluate-uploaded`, {
+      method: 'POST',
+      body: form,
+    })
+  },
+
+  // ---- Resep YOLO — endpoint terpisah total dari training ResNet di atas ----
+  createYoloSplit: (
+    projectId: string,
+    trainRatio: number,
+    valRatio: number,
+    testRatio: number,
+    className: string,
+    seed = 42,
+  ) =>
+    request<YoloSplitSummary>(`${p(projectId)}/yolo-split`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        train_ratio: trainRatio,
+        val_ratio: valRatio,
+        test_ratio: testRatio,
+        seed,
+        class_name: className,
+      }),
+    }),
+
+  getYoloSplit: (projectId: string) => request<YoloSplitSummary>(`${p(projectId)}/yolo-split`),
+
+  getYoloTrainingConfig: (projectId: string) =>
+    request<YoloTrainingConfig>(`${p(projectId)}/yolo-training-config`),
+
+  saveYoloTrainingConfig: (projectId: string, config: YoloTrainingConfig) =>
+    request<YoloTrainingConfig>(`${p(projectId)}/yolo-training-config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    }),
+
+  startYoloTrainingRun: (projectId: string) =>
+    request<{ started: boolean }>(`${p(projectId)}/yolo-training/start`, { method: 'POST' }),
+
+  getYoloTrainingRunStatus: (projectId: string) =>
+    request<YoloTrainingStatus>(`${p(projectId)}/yolo-training/status`),
+
+  stopYoloTrainingRun: (projectId: string) =>
+    request<{ stopped: boolean }>(`${p(projectId)}/yolo-training/stop`, { method: 'POST' }),
+
+  evaluateYoloTestSet: (projectId: string) =>
+    request<YoloEvalResult>(`${p(projectId)}/yolo-training/evaluate-test`, { method: 'POST' }),
 }
