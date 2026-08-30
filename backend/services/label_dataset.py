@@ -16,7 +16,15 @@ class LabelDataset:
     def assign(self, label: str, source_dir: Path, filenames: list[str]) -> int:
         """Copy tiap file di filenames dari source_dir ke label_dir/<label>/.
         Copy (bukan move) supaya crop asli di sample/ tetap ada dan bisa
-        di-assign ulang/ke label lain kalau perlu."""
+        di-assign ulang/ke label lain kalau perlu.
+
+        Sengaja pakai shutil.copy (BUKAN copy2): copy2 ikut menyalin metadata
+        termasuk mtime dari file sumbernya — hasilnya file di dataset/ punya
+        mtime waktu crop itu di-CAPTURE, bukan waktu dia di-assign/dilabel.
+        list_images() di bawah mengurutkan berdasarkan mtime terbaru dulu
+        (asumsinya "baru dilabel"), jadi kalau ikut copy2 urutannya jadi
+        salah (baru DI-CAPTURE duluan, bukan baru DILABEL duluan). shutil.copy
+        polos otomatis kasih mtime = waktu copy = waktu assign ini terjadi."""
         target_dir = self.label_dir / self._safe_name(label)
         target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -26,7 +34,7 @@ class LabelDataset:
                 continue
             src = source_dir / filename
             if src.is_file():
-                shutil.copy2(src, target_dir / filename)
+                shutil.copy(src, target_dir / filename)
                 assigned += 1
         return assigned
 
