@@ -5,6 +5,7 @@ import cv2
 
 PERSON_CLASS_ID = 0  # id class "person" di model COCO bawaan YOLOv8
 CROPS_DIRNAME = "crops"
+CROPS_TOP_DIRNAME = "crops_top"
 
 _model = None
 _model_lock = threading.Lock()
@@ -178,3 +179,40 @@ def crop_objects_label_dir(label_dir: Path, overwrite: bool = False) -> dict:
         "images_with_boxes": images_with_boxes,
         "total_crops": total_crops,
     }
+
+
+def crop_top_label_dir(label_dir: Path, percent: float, overwrite: bool = False) -> dict:
+    """Crop ulang bagian ATAS tiap file crop yang SUDAH ADA di label_dir/crops/
+    (bukan re-derive dari bbox mentah di frame asli) sejauh `percent` dari
+    TINGGI gambar crop itu, simpan ke label_dir/crops_top/ dengan nama file
+    identik ke sumbernya. Sengaja crop-dari-crop (bukan hitung ulang bbox)
+    supaya hasilnya pixel-identik dengan crop yang sudah dilihat/diverifikasi
+    user di "Crop Object" — nol risiko koordinat bbox dihitung beda kedua
+    kalinya. Dipakai untuk fokus klasifikasi ke area atas tubuh (mis. leher/
+    dada tempat lanyard biasa terlihat), buang bagian bawah yang tidak relevan.
+    """
+    src_dir = label_dir / CROPS_DIRNAME
+    dest_dir = label_dir / CROPS_TOP_DIRNAME
+    dest_dir.mkdir(exist_ok=True)
+
+    if not src_dir.exists():
+        return {"total_source": 0, "processed": 0, "skipped": 0}
+
+    files = sorted(src_dir.glob("*.jpg"))
+    processed = 0
+    skipped = 0
+    for f in files:
+        dest_path = dest_dir / f.name
+        if dest_path.exists() and not overwrite:
+            skipped += 1
+            continue
+        img = cv2.imread(str(f))
+        if img is None:
+            continue
+        h = img.shape[0]
+        cut_h = max(1, round(h * percent / 100))
+        top = img[0:cut_h, :]
+        cv2.imwrite(str(dest_path), top)
+        processed += 1
+
+    return {"total_source": len(files), "processed": processed, "skipped": skipped}

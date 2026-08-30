@@ -119,30 +119,30 @@ class CaptureManager:
             "bbox_count": bbox_count,
         }
 
-    def list_crops(self, label: str, limit: int = 60) -> list[dict]:
-        crops_dir = self.sample_dir / self._safe_name(label) / CROPS_DIRNAME
+    def list_crops(self, label: str, limit: int = 60, dirname: str = CROPS_DIRNAME) -> list[dict]:
+        crops_dir = self.sample_dir / self._safe_name(label) / dirname
         if not crops_dir.exists():
             return []
         files = sorted(crops_dir.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return [self._crop_info(f, self._safe_name(label)) for f in files[:limit]]
+        return [self._crop_info(f, self._safe_name(label), dirname) for f in files[:limit]]
 
-    def list_all_crops(self, limit: int = 100) -> list[dict]:
+    def list_all_crops(self, limit: int = 100, dirname: str = CROPS_DIRNAME) -> list[dict]:
         if not self.sample_dir.exists():
             return []
         entries = []
         for label_dir in self.sample_dir.iterdir():
-            crops_dir = label_dir / CROPS_DIRNAME
+            crops_dir = label_dir / dirname
             if label_dir.is_dir() and crops_dir.exists():
                 entries.extend((f, label_dir.name) for f in crops_dir.glob("*.jpg"))
         entries.sort(key=lambda item: item[0].stat().st_mtime, reverse=True)
-        return [self._crop_info(f, label) for f, label in entries[:limit]]
+        return [self._crop_info(f, label, dirname) for f, label in entries[:limit]]
 
     @staticmethod
-    def _crop_info(filepath: Path, label: str) -> dict:
+    def _crop_info(filepath: Path, label: str, dirname: str = CROPS_DIRNAME) -> dict:
         # nama file = "<source_stem>_p<index>.jpg" (lihat person_annotator.crop_objects_label_dir)
         source_stem = re.sub(r"_p\d+$", "", filepath.stem)
         return {
-            "path": f"{label}/{CROPS_DIRNAME}/{filepath.name}",
+            "path": f"{label}/{dirname}/{filepath.name}",
             "camera_id": re.sub(r"_\d{8}_\d{6}_\d{3}$", "", source_stem),
             "label": label,
             "size_bytes": filepath.stat().st_size,
