@@ -30,9 +30,14 @@ def ensure_classes_file(dataset_dir: Path):
 
 def write_boxes(image_path: Path, boxes: list[dict]) -> None:
     """Tulis ulang file .txt YOLO di sebelah image_path dari daftar bbox
-    {x, y, w, h} (pusat + ukuran, ternormalisasi 0-1) — dipakai koreksi manual."""
+    {x, y, w, h, class_id} (pusat + ukuran, ternormalisasi 0-1) — dipakai
+    koreksi manual. class_id dulu selalu 0 ("person" hardcode) — sekarang
+    dibaca dari tiap box (default 0 kalau tidak diisi, aman buat resep
+    ResNet yang memang cuma 1 kelas implisit)."""
     txt_path = image_path.with_suffix(".txt")
-    lines = [f"0 {b['x']:.6f} {b['y']:.6f} {b['w']:.6f} {b['h']:.6f}" for b in boxes]
+    lines = [
+        f"{int(b.get('class_id', 0))} {b['x']:.6f} {b['y']:.6f} {b['w']:.6f} {b['h']:.6f}" for b in boxes
+    ]
     txt_path.write_text("\n".join(lines) + ("\n" if lines else ""))
 
 

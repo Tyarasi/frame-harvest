@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-DEFAULT_CLASS_NAME = "object"
+DEFAULT_CLASS_NAMES = ["object"]
 
 
 def split_yolo_dataset(
@@ -14,7 +14,7 @@ def split_yolo_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = 42,
-    class_name: str = DEFAULT_CLASS_NAME,
+    class_names: list[str] | None = None,
 ) -> dict:
     """Bagi frame PENUH (bukan crop per-objek) + file bbox .txt-nya jadi
     struktur standar ultralytics YOLO: split_dir/images/{train,val,test}/ dan
@@ -32,11 +32,11 @@ def split_yolo_dataset(
     dari split klasifikasi, tidak akan pernah tertukar terbaca sebagai
     satu sama lain.
 
-    `class_name`: nama kelas yang ditulis ke data.yaml (mis. "lanyard",
-    "helm") — TIDAK di-hardcode "person" lagi. Aplikasi ini masih 1 kelas
-    per project (bbox belum bisa dibedakan per-jenis object saat digambar
-    manual), jadi ini murni NAMA tampilan buat kelas index 0, bukan pemicu
-    multi-class."""
+    `class_names`: daftar nama kelas (index list = index kelas di data.yaml,
+    HARUS sinkron dengan class_id yang ditulis di file .txt tiap bbox lewat
+    ImageModal saat koreksi manual — lihat write_boxes di person_annotator.py).
+    Boleh lebih dari 1 sekarang — bukan lagi 1 nama untuk kelas index 0 saja."""
+    class_names = class_names or DEFAULT_CLASS_NAMES
     total = train_ratio + val_ratio + test_ratio
     if abs(total - 1.0) > 1e-6:
         raise ValueError(f"Rasio train+val+test harus 1.0, dapat {total}")
@@ -83,7 +83,7 @@ def split_yolo_dataset(
         "train": "images/train",
         "val": "images/val",
         "test": "images/test",
-        "names": {0: class_name},
+        "names": {i: name for i, name in enumerate(class_names)},
     }
     with open(split_dir / "data.yaml", "w") as f:
         yaml.safe_dump(data_yaml, f, sort_keys=False)
