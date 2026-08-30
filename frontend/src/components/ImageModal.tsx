@@ -463,11 +463,15 @@ export function ImageModal({
                   <button
                     type="button"
                     onClick={() => setEditing(true)}
-                    title="Koreksi BBOX (Ctrl+E)"
+                    title={`${boxes.length > 0 ? 'Koreksi' : 'Tambah'} BBOX (Ctrl+E)`}
                     className="flex items-center gap-1.5 rounded-lg border border-blue-900 px-2.5 py-1 text-xs font-medium text-blue-400 hover:bg-blue-950"
                   >
                     <PencilIcon className="h-3.5 w-3.5" />
-                    Koreksi BBOX
+                    {/* "Koreksi" tersirat ada sesuatu yang SUDAH ADA untuk
+                        diperbaiki — untuk frame yang belum pernah punya bbox
+                        sama sekali (mis. alur YOLO manual, tanpa auto-detect),
+                        yang sebenarnya terjadi itu MENAMBAH, bukan mengoreksi */}
+                    {boxes.length > 0 ? 'Koreksi BBOX' : 'Tambah BBOX'}
                     <span className="text-blue-600">Ctrl+E</span>
                   </button>
                 )}

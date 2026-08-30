@@ -233,7 +233,12 @@ export function LabelReview({ projectId, labels, onChanged }: Props) {
                       alt={img.path}
                       loading="lazy"
                       onLoad={(e) => handleImgLoad(img.path, e)}
-                      className="h-full w-full object-cover transition hover:opacity-80"
+                      // object-contain (bukan object-cover): halaman ini buat
+                      // MENGECEK KEBENARAN label, jadi gambar harus kelihatan
+                      // utuh apa adanya — termasuk untuk crop bagian atas yang
+                      // rasio aspeknya beda-beda, tidak boleh ada bagian yang
+                      // kepotong dari tampilan review
+                      className="h-full w-full object-contain transition hover:opacity-80"
                     />
                   </div>
                   <div className="space-y-0.5 px-1.5 py-1">
