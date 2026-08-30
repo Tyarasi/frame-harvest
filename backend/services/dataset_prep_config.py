@@ -31,7 +31,16 @@ def get_config(project_dir: Path) -> dict:
 
 
 def save_config(project_dir: Path, config: dict) -> dict:
-    merged = {**DEFAULT_CONFIG, **config}
+    """Merge di atas file yang SUDAH TERSIMPAN (bukan cuma DEFAULT_CONFIG) —
+    penting karena file ini sekarang ditulis dari 2 tempat independen
+    (setup Persiapan Dataset di satu sisi, panel "Bersihkan Sample Lama" di
+    sisi lain). Kalau merge cuma ke DEFAULT_CONFIG, `config` HARUS berisi
+    semua field co-writer lain atau field itu ke-reset ke default — merge ke
+    file tersimpan berarti pemanggil cukum kirim field yang benar-benar mau
+    diubah (partial update), field lain otomatis ikut nilai tersimpan
+    terakhir, tidak saling menimpa."""
+    current = get_config(project_dir)
+    merged = {**current, **config}
     project_dir.mkdir(parents=True, exist_ok=True)
     with open(project_dir / CONFIG_FILENAME, "w") as f:
         json.dump(merged, f, indent=2)
