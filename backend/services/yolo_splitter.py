@@ -4,9 +4,7 @@ from pathlib import Path
 
 import yaml
 
-# Sesuai PERSON_CLASS_ID di person_annotator.py — aplikasi ini baru
-# mendeteksi 1 kelas ("person"), jadi data.yaml YOLO juga baru 1 kelas.
-CLASS_NAMES = ["person"]
+DEFAULT_CLASS_NAME = "object"
 
 
 def split_yolo_dataset(
@@ -16,6 +14,7 @@ def split_yolo_dataset(
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
     seed: int = 42,
+    class_name: str = DEFAULT_CLASS_NAME,
 ) -> dict:
     """Bagi frame PENUH (bukan crop per-objek) + file bbox .txt-nya jadi
     struktur standar ultralytics YOLO: split_dir/images/{train,val,test}/ dan
@@ -31,7 +30,13 @@ def split_yolo_dataset(
     seperti split ResNet) — ini konvensi yang dipahami ultralytics langsung
     lewat data.yaml, dan sekaligus penanda struktur di disk sudah beda total
     dari split klasifikasi, tidak akan pernah tertukar terbaca sebagai
-    satu sama lain."""
+    satu sama lain.
+
+    `class_name`: nama kelas yang ditulis ke data.yaml (mis. "lanyard",
+    "helm") — TIDAK di-hardcode "person" lagi. Aplikasi ini masih 1 kelas
+    per project (bbox belum bisa dibedakan per-jenis object saat digambar
+    manual), jadi ini murni NAMA tampilan buat kelas index 0, bukan pemicu
+    multi-class."""
     total = train_ratio + val_ratio + test_ratio
     if abs(total - 1.0) > 1e-6:
         raise ValueError(f"Rasio train+val+test harus 1.0, dapat {total}")
@@ -78,7 +83,7 @@ def split_yolo_dataset(
         "train": "images/train",
         "val": "images/val",
         "test": "images/test",
-        "names": {i: name for i, name in enumerate(CLASS_NAMES)},
+        "names": {0: class_name},
     }
     with open(split_dir / "data.yaml", "w") as f:
         yaml.safe_dump(data_yaml, f, sort_keys=False)
