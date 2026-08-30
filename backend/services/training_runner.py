@@ -1,3 +1,4 @@
+import io
 import threading
 from pathlib import Path
 
@@ -263,32 +264,38 @@ def stop_training(project_id: str) -> bool:
     return True
 
 
-def evaluate_test_set(project_dir: Path) -> dict:
-    """Evaluasi best_model.pt terhadap split/test — gambar yang TIDAK PERNAH
-    dilihat selama training maupun pemilihan checkpoint terbaik (beda dari
-    split/val yang ikut menentukan checkpoint mana yang disimpan). Ini ukuran
-    performa paling jujur yang tersedia untuk model tersimpan saat ini."""
-    checkpoint_path = project_dir / "model" / "best_model.pt"
-    if not checkpoint_path.exists():
-        raise RuntimeError("Belum ada model tersimpan — jalankan training dulu sampai minimal 1 epoch selesai")
+def _evaluate_checkpoint_dict(project_dir: Path, checkpoint: dict) -> dict:
+    """Inti evaluasi terhadap split/test — dipakai baik untuk model yang
+    dilatih & tersimpan lewat aplikasi ini (evaluate_test_set) maupun model
+    .pt yang diupload manual dari luar (evaluate_uploaded_checkpoint). Logic
+    sama persis, cuma sumber dict checkpoint-nya beda — supaya kedua alur
+    dijamin menghasilkan angka yang bisa dibandingkan apple-to-apple."""
+    if not isinstance(checkpoint, dict) or "model_state" not in checkpoint or "class_names" not in checkpoint:
+        raise RuntimeError(
+            "Format checkpoint tidak dikenali — file .pt harus berisi dict dengan minimal "
+            "'model_state' dan 'class_names' (format yang sama dengan hasil training di aplikasi ini)"
+        )
+
+    class_names = checkpoint["class_names"]
+    backbone = checkpoint.get("backbone", "resnet18")
 
     test_dir = project_dir / "split" / "test"
     if not test_dir.exists() or not any(test_dir.iterdir()):
         raise RuntimeError("Folder split/test kosong — jalankan 'Split Dataset' dulu")
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
-    class_names = checkpoint["class_names"]
-    backbone = checkpoint.get("backbone", "resnet18")
-
     test_dataset = ImageFolder(str(test_dir), transform=EVAL_TRANSFORM)
     if test_dataset.classes != class_names:
         raise RuntimeError(
-            "Label di split/test tidak cocok dengan model tersimpan — jalankan ulang Split Dataset & training"
+            f"Label di split/test ({', '.join(test_dataset.classes)}) tidak cocok dengan "
+            f"label model ({', '.join(class_names)}) — pastikan model ini memang dilatih untuk project yang sama"
         )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _build_model(backbone, len(class_names), freeze_backbone=True)
-    model.load_state_dict(checkpoint["model_state"])
+    try:
+        model.load_state_dict(checkpoint["model_state"])
+    except RuntimeError as e:
+        raise RuntimeError(f"Bobot model tidak cocok dengan arsitektur '{backbone}': {e}") from e
     model.to(device)
 
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
@@ -317,3 +324,28 @@ def evaluate_test_set(project_dir: Path) -> dict:
         "f1": round(metrics["f1"], 4),
         "predictions": predictions,
     }
+
+
+def evaluate_test_set(project_dir: Path) -> dict:
+    """Evaluasi best_model.pt (hasil training di aplikasi ini) terhadap
+    split/test — gambar yang TIDAK PERNAH dilihat selama training maupun
+    pemilihan checkpoint terbaik. Ini ukuran performa paling jujur yang
+    tersedia untuk model tersimpan saat ini."""
+    checkpoint_path = project_dir / "model" / "best_model.pt"
+    if not checkpoint_path.exists():
+        raise RuntimeError("Belum ada model tersimpan — jalankan training dulu sampai minimal 1 epoch selesai")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    return _evaluate_checkpoint_dict(project_dir, checkpoint)
+
+
+def evaluate_uploaded_checkpoint(project_dir: Path, checkpoint_bytes: bytes) -> dict:
+    """Sama seperti evaluate_test_set, tapi checkpoint-nya diupload manual
+    (mis. hasil training di mesin lain) — TIDAK PERNAH ditulis ke
+    model/best_model.pt atau disimpan permanen di mana pun, murni dievaluasi
+    di memori lalu dibuang. Tidak menyentuh/menimpa model project yang sudah
+    ada dari training di aplikasi ini."""
+    try:
+        checkpoint = torch.load(io.BytesIO(checkpoint_bytes), map_location="cpu", weights_only=True)
+    except Exception as e:  # noqa: BLE001 — file rusak/bukan .pt, laporkan ke UI apa adanya
+        raise RuntimeError(f"File .pt tidak valid atau rusak: {e}") from e
+    return _evaluate_checkpoint_dict(project_dir, checkpoint)
