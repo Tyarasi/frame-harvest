@@ -7,10 +7,13 @@ import {
   type CropTopResult,
   type DatasetTarget,
   type LabelInfo,
+  type Project,
+  type Stage,
 } from '../../api'
-import { recipeFor } from '../../recipes'
+import { recipeFor, type RecipeStep } from '../../recipes'
 import { RecipeStepNav } from '../projects/RecipeStepNav'
 import { ActionBadge } from '../ui/ActionBadge'
+import { useConfirm } from '../ui/ConfirmProvider'
 import { ChevronLeftIcon, ChevronRightIcon } from '../ui/icons'
 import { DatasetSplit } from './DatasetSplit'
 import { Gallery } from './Gallery'
@@ -35,6 +38,11 @@ interface Props {
   projectId: string
   projectName: string
   datasetTarget: DatasetTarget
+  // checklist tahap BBox/Crop project ini — dinamis, boleh ditambah kapan
+  // saja (lihat api/types.ts::Stage). Ditentukan & dimiliki App.tsx (bagian
+  // dari Project), bukan state lokal komponen ini.
+  stages: Stage[]
+  onStagesChanged: () => void
   cameras: Camera[]
   counts: Record<string, number>
   focusLabel?: string | null
@@ -56,13 +64,30 @@ export function PersiapanDatasetPhase({
   projectId,
   projectName,
   datasetTarget,
+  stages,
+  onStagesChanged,
   cameras,
   counts,
   focusLabel,
   onResetAll,
 }: Props) {
   const recipe = recipeFor(datasetTarget)
-  const [step, setStepState] = useState<string>(() => getInitialStep(recipe.steps[0].id))
+  // checklist tahap BBox/Crop project ini + tail tetap (croptop/label/review
+  // untuk resnet, split untuk keduanya) digabung jadi SATU rangkaian step —
+  // lihat recipes.ts untuk kenapa bbox/crop tidak lagi statis di sana.
+  const stageSteps: RecipeStep[] = stages.map((s) => ({
+    id: s.id,
+    label: s.name,
+    shortLabel: s.name.length > 14 ? `${s.name.slice(0, 13)}…` : s.name,
+    description:
+      s.type === 'bbox'
+        ? 'Gambar/koreksi bbox untuk tahap ini — klik gambar, lalu "Tambah/Koreksi BBOX".'
+        : 'Potong tiap bbox dari tahap sebelumnya jadi gambar terpisah.',
+  }))
+  const allSteps = [...stageSteps, ...recipe.steps]
+  const stageIds = stages.map((s) => s.id).join(',')
+
+  const [step, setStepState] = useState<string>(() => getInitialStep(allSteps[0].id))
 
   function setStep(next: string) {
     setStepState(next)
@@ -71,12 +96,13 @@ export function PersiapanDatasetPhase({
     window.history.replaceState({}, '', url)
   }
 
-  // kalau step di URL tidak valid untuk resep aktif (mis. project lain beda
-  // dataset_target), jatuhkan ke step pertama alih-alih layar kosong
+  // kalau step di URL tidak valid untuk resep+checklist tahap aktif (mis.
+  // project lain beda dataset_target, atau tahap yang lagi dibuka baru saja
+  // dihapus), jatuhkan ke step pertama alih-alih layar kosong
   useEffect(() => {
-    if (!recipe.steps.some((s) => s.id === step)) setStep(recipe.steps[0].id)
+    if (!allSteps.some((s) => s.id === step)) setStep(allSteps[0].id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recipe.target])
+  }, [recipe.target, stageIds])
 
   const samples = Object.keys(counts)
   const totalFrames = Object.values(counts).reduce((a, b) => a + b, 0)
@@ -87,6 +113,7 @@ export function PersiapanDatasetPhase({
   const [hasCrops, setHasCrops] = useState(false)
   const [existingLabels, setExistingLabels] = useState<LabelInfo[]>([])
   const [hasSplit, setHasSplit] = useState(false)
+  const [hasYoloSplit, setHasYoloSplit] = useState(false)
 
   function reloadLabels() {
     if (!projectId) return
@@ -110,19 +137,39 @@ export function PersiapanDatasetPhase({
       .catch(() => setHasSplit(false))
   }, [projectId, step])
 
+  // dulu step 'split' cek `hasLabels` buat SEMUA target (bug laten — YOLO
+  // tidak pernah assign label sama sekali, jadi Split-nya YOLO ketutup
+  // permanen di navigasi kalau lewat sini; sekaligus checkmark "selesai"-nya
+  // baca ringkasan split ResNet, bukan yolo-split). Diperbaiki sekalian di
+  // sini karena satu area yang sama yang lagi dirapikan buat tahap general.
+  useEffect(() => {
+    if (!projectId || datasetTarget !== 'yolo') return setHasYoloSplit(false)
+    api
+      .getYoloSplit(projectId)
+      .then((summary) => setHasYoloSplit(summary.train + summary.val + summary.test > 0))
+      .catch(() => setHasYoloSplit(false))
+  }, [projectId, datasetTarget, step])
+
   const hasLabels = existingLabels.some((l) => l.count > 0)
 
   function disabledReason(stepId: string): string | null {
+    // tahap BBox/Crop dinamis (checklist) — gating generik: butuh minimal
+    // ada frame tercapture. Belum sepresisi "tahap sebelumnya di rantai ini
+    // sudah ada hasilnya" untuk rantai yang lebih dari 1 pasang, tapi cukup
+    // untuk mencegah step kosong total.
+    if (stages.some((s) => s.id === stepId)) {
+      return hasFrames ? null : 'Ambil gambar dulu di fase Capture'
+    }
     switch (stepId) {
-      case 'bbox':
-      case 'crop':
-        return hasFrames ? null : 'Ambil gambar dulu di fase Capture'
       case 'croptop':
       case 'label':
         return hasCrops ? null : 'Crop Object dulu — belum ada crop yang bisa dilabel'
       case 'review':
         return hasLabels ? null : 'Label minimal 1 crop dulu'
       case 'split':
+        if (datasetTarget === 'yolo') {
+          return hasFrames ? null : 'Selesaikan tahap BBox dulu sebelum bisa displit'
+        }
         return hasLabels ? null : 'Label dataset dulu sebelum bisa displit'
       default:
         return null
@@ -130,15 +177,15 @@ export function PersiapanDatasetPhase({
   }
 
   function isDone(stepId: string): boolean {
+    // sama seperti disabledReason — checkmark generik buat tahap dinamis,
+    // belum per-tahap presisi untuk rantai lebih dari 1 pasang
+    if (stages.some((s) => s.id === stepId)) return hasCrops
     switch (stepId) {
-      case 'bbox':
-      case 'crop':
-        return hasCrops
       case 'label':
       case 'review':
         return hasLabels
       case 'split':
-        return hasSplit
+        return datasetTarget === 'yolo' ? hasYoloSplit : hasSplit
       default:
         return false
     }
@@ -335,7 +382,11 @@ export function PersiapanDatasetPhase({
   const pagedCrops = crops.slice(currentPage * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE + ITEMS_PER_PAGE)
   const swipeReady = leftLabel.trim() !== '' && rightLabel.trim() !== ''
 
-  const activeStepDef = recipe.steps.find((s) => s.id === step)
+  const activeStepDef = allSteps.find((s) => s.id === step)
+  const activeStage = stages.find((s) => s.id === step)
+  const isLastStage = stages.length > 0 && stages[stages.length - 1].id === step
+  const nextStageType: Stage['type'] = stages.length === 0 || stages[stages.length - 1].type === 'crop' ? 'bbox' : 'crop'
+  const minStages = datasetTarget === 'yolo' ? 1 : 2
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
@@ -347,26 +398,52 @@ export function PersiapanDatasetPhase({
       </p>
 
       <RecipeStepNav
-        steps={recipe.steps}
+        steps={allSteps}
         active={step}
         isDone={isDone}
         disabledReason={disabledReason}
         onSelect={setStep}
       />
 
-      {(step === 'bbox' || step === 'crop') && (
-        <Gallery
-          projectId={projectId}
-          cameras={cameras}
-          counts={counts}
-          focusLabel={focusLabel}
-          onResetAll={onResetAll}
-          viewMode={step === 'bbox' ? 'frame' : 'crop'}
-          showAutoAnnotate={datasetTarget !== 'yolo'}
-          classNames={datasetTarget === 'yolo' ? yoloClassNames : ['person']}
-          manageClasses={datasetTarget === 'yolo'}
-          onClassNamesChange={setYoloClassNames}
-        />
+      {activeStage && (
+        <>
+          <Gallery
+            projectId={projectId}
+            cameras={cameras}
+            counts={counts}
+            focusLabel={focusLabel}
+            onResetAll={onResetAll}
+            viewMode={activeStage.type === 'bbox' ? 'frame' : 'crop'}
+            stageId={activeStage.id}
+            // auto-detect (COCO pretrained, kelas "person") cuma masuk akal
+            // di tahap BBox PERTAMA project — bukan berdasarkan target
+            // (resnet/yolo) lagi. Koreksi dari versi sebelumnya: tahap
+            // pertama resep YOLO SEKARANG bisa saja memang deteksi person
+            // dulu (buat crop), baru tahap berikutnya deteksi object custom
+            // (mis. lanyard) — auto-detect di tahap pertama tetap relevan
+            // walau target akhirnya YOLO. Tahap manapun SETELAH tahap
+            // pertama selalu manual (backend juga menolaknya di luar itu).
+            showAutoAnnotate={activeStage.id === stages[0]?.id}
+            classNames={datasetTarget === 'yolo' ? yoloClassNames : ['person']}
+            manageClasses={datasetTarget === 'yolo'}
+            onClassNamesChange={setYoloClassNames}
+          />
+          {isLastStage && (
+            <StageChecklistControls
+              projectId={projectId}
+              nextStageType={nextStageType}
+              canRemove={stages.length > minStages}
+              onAdded={(project) => {
+                onStagesChanged()
+                setStep(project.stages[project.stages.length - 1].id)
+              }}
+              onRemoved={() => {
+                onStagesChanged()
+                setStep(stages[stages.length - 2]?.id ?? allSteps[0].id)
+              }}
+            />
+          )}
+        </>
       )}
 
       {step === 'croptop' && (
@@ -784,6 +861,120 @@ export function PersiapanDatasetPhase({
           hasNext={openIndex >= 0 && openIndex < crops.length - 1}
         />
       )}
+    </div>
+  )
+}
+
+interface StageChecklistControlsProps {
+  projectId: string
+  // tipe tahap yang VALID ditambah berikutnya — selalu kebalikan dari tipe
+  // tahap terakhir saat ini (checklist wajib alternating, lihat
+  // backend/services/stage_resolver.py::can_add_stage)
+  nextStageType: Stage['type']
+  // false kalau tahap ini sudah checklist bawaan minimum (root+crops untuk
+  // resnet, root saja untuk yolo) — tidak boleh dihapus lagi di bawah itu
+  canRemove: boolean
+  onAdded: (project: Project) => void
+  onRemoved: () => void
+}
+
+// Kontrol "+ Tambah Tahap" / "Undo Tahap Ini" — cuma dirender di tahap
+// TERAKHIR dalam checklist (lihat isLastStage di komponen induk), karena
+// backend cuma bisa nambah di akhir & hapus dari akhir (bukan tahap
+// sembarang di tengah — itu akan merusak rantai bbox->crop setelahnya).
+function StageChecklistControls({
+  projectId,
+  nextStageType,
+  canRemove,
+  onAdded,
+  onRemoved,
+}: StageChecklistControlsProps) {
+  const confirm = useConfirm()
+  const [name, setName] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleAdd() {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    setAdding(true)
+    setError(null)
+    try {
+      const project = await api.addStage(projectId, nextStageType, trimmed)
+      setName('')
+      onAdded(project)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menambah tahap')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  async function handleRemove() {
+    const confirmed = await confirm({
+      title: 'Hapus tahap ini?',
+      message:
+        'Tahap ini akan dihapus beserta hasilnya di disk (folder crop, atau file bbox yang sudah ditulis tahap ini) — tidak bisa dibatalkan.',
+      confirmLabel: 'Hapus Tahap',
+      danger: true,
+    })
+    if (!confirmed) return
+    setRemoving(true)
+    setError(null)
+    try {
+      await api.removeLastStage(projectId)
+      onRemoved()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal menghapus tahap')
+    } finally {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 rounded-lg border border-dashed border-slate-700 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-1 flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-500">
+            {nextStageType === 'bbox'
+              ? 'Butuh deteksi/gambar bbox baru di dalam hasil tahap ini?'
+              : 'Butuh potong hasil bbox tahap ini jadi gambar terpisah?'}
+          </span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                handleAdd()
+              }
+            }}
+            placeholder={nextStageType === 'bbox' ? 'mis. Deteksi Lanyard' : 'mis. Crop Lanyard'}
+            className="min-w-[10rem] max-w-xs flex-1 rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleAdd}
+            disabled={adding || !name.trim()}
+            className="rounded-lg border border-blue-900 px-3 py-1.5 text-xs font-medium text-blue-400 hover:bg-blue-950 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {adding ? 'Menambah…' : `+ Tambah Tahap ${nextStageType === 'bbox' ? 'BBox' : 'Crop'}`}
+          </button>
+        </div>
+        {canRemove && (
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={removing}
+            className="shrink-0 rounded-lg border border-red-900 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-950 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {removing ? 'Menghapus…' : 'Undo Tahap Ini'}
+          </button>
+        )}
+      </div>
+      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
     </div>
   )
 }

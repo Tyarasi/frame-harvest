@@ -1,11 +1,15 @@
 import type { DatasetTarget } from './api'
 
-// "Resep" = rangkaian langkah persiapan dataset untuk satu dataset_target.
-// Fase "Persiapan Dataset" di navigasi TIDAK hardcode langkah-langkahnya —
-// dia baca dari sini berdasarkan dataset_target project aktif. Nambah target
-// baru (mis. YOLO deteksi, yang tidak butuh Crop/Label per-objek karena
-// modelnya langsung dilatih dari bbox di frame penuh) cukup nambah entri baru
-// di RECIPES, navigasi & gating ikut menyesuaikan otomatis.
+// "Resep" = rangkaian langkah PENUTUP persiapan dataset untuk satu
+// dataset_target — SETELAH checklist tahap BBox/Crop (lihat api/types.ts::
+// Stage & stageStepsFor() di PersiapanDatasetPhase.tsx). Tahap BBox/Crop
+// sendiri TIDAK lagi didefinisikan statis di sini — dulu resnet selalu
+// "bbox->crop" tetap 1x, yolo selalu "bbox" tetap 1x; sekarang keduanya
+// bisa dirantai berkali-kali per project (checklist dinamis di
+// project.stages), jadi bagian itu dihitung dari data project, bukan dari
+// konstanta di file ini. RECIPES cuma nyimpan apa yang terjadi SETELAH
+// rantai tahap itu selesai (Crop Atas/Label/Review untuk resnet, langsung
+// Split untuk yolo).
 
 export interface RecipeStep {
   id: string
@@ -29,18 +33,6 @@ export const RECIPES: Record<DatasetTarget, Recipe> = {
     target: 'resnet',
     label: 'ResNet — Klasifikasi',
     steps: [
-      {
-        id: 'bbox',
-        label: 'Frame & BBox Person',
-        shortLabel: 'BBox',
-        description: 'Lihat frame hasil capture, deteksi orang otomatis lewat YOLO, koreksi manual kalau perlu.',
-      },
-      {
-        id: 'crop',
-        label: 'Crop Object',
-        shortLabel: 'Crop',
-        description: 'Potong tiap bbox jadi gambar terpisah per orang — satu crop, satu subjek.',
-      },
       {
         id: 'croptop',
         label: 'Crop Bagian Atas',
@@ -68,21 +60,14 @@ export const RECIPES: Record<DatasetTarget, Recipe> = {
       },
     ],
   },
-  // YOLO dilatih langsung dari FRAME PENUH + bbox-nya (bukan crop per-objek),
-  // jadi tidak butuh Crop/Crop Atas/Label/Review sama sekali — begitu bbox
-  // ada, langsung bisa displit. Ini bukti bahwa arsitektur resep memang bisa
-  // menampung alur yang jauh lebih pendek, bukan cuma placeholder di UI.
+  // YOLO tidak butuh Crop Atas/Label/Review sama sekali — begitu checklist
+  // tahap BBox/Crop-nya selesai (minimal 1 tahap BBox), langsung bisa
+  // displit dari UJUNG rantai tahap itu (lihat stageStepsFor() di
+  // PersiapanDatasetPhase.tsx & backend/services/stage_resolver.py).
   yolo: {
     target: 'yolo',
     label: 'YOLO — Deteksi Objek',
     steps: [
-      {
-        id: 'bbox',
-        label: 'Frame & BBox',
-        shortLabel: 'BBox',
-        description:
-          'Gambar bbox manual per frame untuk object yang mau dideteksi — tidak ada auto-detect, object ini belum pernah dikenal model manapun.',
-      },
       {
         id: 'split',
         label: 'Split Dataset',

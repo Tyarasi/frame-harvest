@@ -325,6 +325,8 @@ export default function App() {
             projectId={projectId}
             projectName={activeProject?.name ?? ''}
             datasetTarget={activeProject?.dataset_target ?? 'resnet'}
+            stages={activeProject?.stages ?? []}
+            onStagesChanged={() => reloadProjects(projectId)}
             cameras={cameras}
             counts={status?.counts ?? {}}
             focusLabel={focusLabel}
