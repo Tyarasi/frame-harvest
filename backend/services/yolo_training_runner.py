@@ -29,6 +29,13 @@ class YoloTrainingJob:
         self.status = "idle"  # idle | running | finished | stopped | error
         self.epoch = 0
         self.total_epochs = 0
+        # progress DI DALAM epoch yang sedang jalan — diisi dari callback
+        # on_train_epoch_start/on_train_batch_end (jauh lebih sering
+        # dipanggil daripada on_fit_epoch_end yang cuma di UJUNG epoch),
+        # supaya UI tidak kelihatan "macet di 0%" selama 1 epoch penuh kalau
+        # epoch-nya lama (umum di CPU)
+        self.batch = 0
+        self.total_batches = 0
         self.history: list[dict] = []
         self.error: str | None = None
         self._stop_event = threading.Event()
@@ -38,6 +45,8 @@ class YoloTrainingJob:
             "status": self.status,
             "epoch": self.epoch,
             "total_epochs": self.total_epochs,
+            "batch": self.batch,
+            "total_batches": self.total_batches,
             "history": self.history,
             "error": self.error,
         }
@@ -111,7 +120,29 @@ def _run_training(job: YoloTrainingJob, project_dir: Path, config: dict) -> None
             if job._stop_event.is_set():
                 raise StopTraining("Dibatalkan oleh user")
 
+        def on_train_epoch_start(trainer):
+            # reset progress dalam-epoch tiap epoch baru mulai — total_batches
+            # dihitung dari panjang dataloader (diverifikasi langsung lewat
+            # tes manual, bukan asumsi nama/isi atribut trainer)
+            job.batch = 0
+            job.total_batches = len(trainer.train_loader)
+
+        def on_train_batch_end(trainer):
+            # dipanggil TIAP BATCH (jauh lebih sering dari on_fit_epoch_end
+            # yang cuma di ujung epoch) — dipakai buat 2 hal: (1) progress
+            # dalam-epoch biar UI tidak kelihatan macet di 0% selama epoch
+            # pertama yang lama, (2) cek "batalkan" lebih responsif —
+            # sebelumnya cancel baru kepakai di BATAS EPOCH, yang di CPU bisa
+            # berarti nunggu puluhan detik-menit. Diverifikasi langsung lewat
+            # tes manual: exception dari sini propagate & benar2 hentikan
+            # model.train() dalam hitungan batch, bukan epoch.
+            job.batch += 1
+            if job._stop_event.is_set():
+                raise StopTraining("Dibatalkan oleh user")
+
         model.add_callback("on_fit_epoch_end", on_fit_epoch_end)
+        model.add_callback("on_train_epoch_start", on_train_epoch_start)
+        model.add_callback("on_train_batch_end", on_train_batch_end)
 
         run_dir = project_dir / "model_yolo_runs"
         stopped_early = False

@@ -167,6 +167,15 @@ export interface YoloTrainingConfig {
   epochs: number
   batch_size: number
   imgsz: number
+  // early stopping — berhenti kalau mAP tidak membaik selama N epoch
+  patience: number
+  // jumlah layer awal (bobot pretrained) yang dibekukan — 0 = tidak ada
+  freeze: number
+  mosaic: boolean
+  fliplr: number
+  flipud: number
+  degrees: number
+  cache: 'none' | 'ram' | 'disk'
 }
 
 export interface YoloMetricPoint {
@@ -184,6 +193,10 @@ export interface YoloTrainingStatus {
   status: 'idle' | 'running' | 'finished' | 'stopped' | 'error'
   epoch: number
   total_epochs: number
+  // progress DI DALAM epoch yang sedang jalan (per-batch) — biar tidak
+  // kelihatan macet di "0%" selama 1 epoch penuh kalau epoch-nya lama
+  batch: number
+  total_batches: number
   history: YoloMetricPoint[]
   error: string | null
 }
