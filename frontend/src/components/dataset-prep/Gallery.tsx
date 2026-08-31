@@ -37,6 +37,10 @@ interface Props {
   // dari popup pemilih kelas di ImageModal — cuma resep YOLO
   manageClasses?: boolean
   onClassNamesChange?: (next: string[]) => void
+  // id tahap BBox/Crop general (lihat api/types.ts::Stage) yang lagi
+  // ditampilkan galeri ini — kosong = folder akar (perilaku lama: 1 bbox +
+  // 1 crop per project, seperti sebelum fitur tahap berantai ini ada)
+  stageId?: string
 }
 
 const ALL_LABELS = '__all__'
@@ -62,6 +66,7 @@ export function Gallery({
   classNames = ['person'],
   manageClasses = false,
   onClassNamesChange,
+  stageId,
 }: Props) {
   const confirm = useConfirm()
   const labels = Object.keys(counts)
@@ -148,11 +153,11 @@ export function Gallery({
     const fetcher =
       viewMode === 'crop'
         ? selected === ALL_LABELS
-          ? api.listAllCrops(projectId)
-          : api.listCrops(projectId, selected)
+          ? api.listAllCrops(projectId, 5000, false, stageId)
+          : api.listCrops(projectId, selected, 5000, false, stageId)
         : selected === ALL_LABELS
-          ? api.listAllImages(projectId)
-          : api.listImages(projectId, selected)
+          ? api.listAllImages(projectId, 5000, stageId)
+          : api.listImages(projectId, selected, 5000, stageId)
     fetcher.then(setImages).catch(() => {})
   }
 
@@ -160,7 +165,7 @@ export function Gallery({
     reloadImages()
     const id = setInterval(reloadImages, 5000)
     return () => clearInterval(id)
-  }, [selected, viewMode, projectId])
+  }, [selected, viewMode, projectId, stageId])
 
   function cameraName(cameraId: string): string {
     return cameras.find((c) => c.id === cameraId)?.name ?? cameraId
@@ -197,7 +202,7 @@ export function Gallery({
       const deleteFn = viewMode === 'crop' ? api.deleteCrops : api.deleteImages
       const entries = [...byLabel.entries()]
       const results = await Promise.allSettled(
-        entries.map(([lbl, filenames]) => deleteFn(projectId, lbl, filenames)),
+        entries.map(([lbl, filenames]) => deleteFn(projectId, lbl, filenames, stageId)),
       )
 
       // hanya anggap "terhapus" untuk label yang request-nya benar-benar berhasil —
@@ -290,8 +295,8 @@ export function Gallery({
     try {
       const result =
         selected === ALL_LABELS
-          ? await api.annotateAll(projectId, overwriteAnnotate)
-          : await api.annotateLabel(projectId, selected, overwriteAnnotate)
+          ? await api.annotateAll(projectId, overwriteAnnotate, 0.4, stageId)
+          : await api.annotateLabel(projectId, selected, overwriteAnnotate, 0.4, stageId)
       setAnnotateResult(result)
       reloadImages()
     } finally {
@@ -305,8 +310,8 @@ export function Gallery({
     try {
       const result =
         selected === ALL_LABELS
-          ? await api.cropAllObjects(projectId, overwriteCrop)
-          : await api.cropObjects(projectId, selected, overwriteCrop)
+          ? await api.cropAllObjects(projectId, overwriteCrop, stageId)
+          : await api.cropObjects(projectId, selected, overwriteCrop, stageId)
       setCropResult(result)
       reloadImages()
     } finally {
@@ -342,7 +347,7 @@ export function Gallery({
               ? showAutoAnnotate
                 ? 'Lihat frame hasil capture, deteksi orang otomatis, koreksi manual kalau perlu.'
                 : 'Gambar bbox manual per frame — klik gambar, lalu "Tambah BBOX". Object baru belum pernah dikenal model, jadi tidak bisa dideteksi otomatis.'
-              : 'Potong tiap bbox jadi gambar terpisah per orang.'}
+              : 'Potong tiap bbox jadi gambar terpisah per orang. Butuh anotasi lanjutan di dalam crop ini (mis. object yang menempel di badan)? Klik gambar, lalu "Tambah BBOX" — sama seperti di Frame & BBox, cuma manual (belum ada model yang kenal object custom).'}
           </p>
         </div>
 
@@ -583,16 +588,19 @@ export function Gallery({
       {openImage && (
         <ImageModal
           src={api.sampleImageUrl(projectId, openImage.path)}
-          annotationUrl={
-            viewMode === 'frame' ? api.annotationUrl(projectId, openImage.path) : undefined
-          }
+          // dulu dikunci ke viewMode 'frame' saja — folder hasil Crop pun
+          // sekarang bisa jadi sumber bbox tahap berikutnya (mis. object
+          // yang menempel di badan hasil crop), jadi anotasi harus bisa
+          // dibaca/ditulis di KEDUA mode, bukan cuma 'frame'
+          annotationUrl={api.annotationUrl(projectId, openImage.path)}
           projectId={projectId}
-          editable={viewMode === 'frame'}
+          editable
           classNames={classNames}
           manageClasses={manageClasses}
           onClassNamesChange={onClassNamesChange}
           label={openImage.label}
           filename={filenameOf(openImage.path)}
+          stageId={stageId}
           caption={`${cameraName(openImage.camera_id)} · ${openImage.label} · ${
             dimensions[openImage.path] ?? '…'
           } · ${formatFileSize(openImage.size_bytes)}`}
