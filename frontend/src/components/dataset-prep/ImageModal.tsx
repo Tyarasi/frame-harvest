@@ -18,6 +18,10 @@ interface Props {
   projectId?: string
   label?: string
   filename?: string
+  // id tahap BBox general (lihat api/types.ts::Stage) yang gambar ini
+  // ada di dalamnya — diteruskan ke saveBoxes supaya bbox disimpan ke
+  // folder yang benar. Kosong = folder akar (perilaku lama)
+  stageId?: string
   caption: string
   onClose: () => void
   onPrev?: () => void
@@ -67,6 +71,14 @@ interface CornerBox {
 }
 
 const MIN_SIZE = 0.01
+
+const ZOOM_MIN = 0.5
+const ZOOM_MAX = 4
+const ZOOM_STEP = 0.25
+
+function clampZoom(z: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100))
+}
 
 // Slot 1, 2, 3, 4, 5, 7 dari palet kategorikal skill dataviz (biru, oranye,
 // aqua, kuning, magenta, ungu) — sengaja LEWATI slot hijau & merah supaya
@@ -139,6 +151,7 @@ export function ImageModal({
   projectId,
   label,
   filename,
+  stageId,
   caption,
   onClose,
   onPrev,
@@ -172,12 +185,22 @@ export function ImageModal({
   const [openClassPopup, setOpenClassPopup] = useState<number | null>(null)
   // isi input "+ Tambah" di dalam popup — cuma dipakai kalau manageClasses
   const [newClassName, setNewClassName] = useState('')
+  // index kelas yang lagi diedit NAMANYA (mis. ganti "object" bawaan jadi
+  // nama sendiri) — null kalau tidak ada yang lagi diedit
+  const [editingClassId, setEditingClassId] = useState<number | null>(null)
+  const [editingName, setEditingName] = useState('')
+
+  // batal mode edit nama kalau popup-nya sendiri ditutup/pindah ke box lain
+  useEffect(() => {
+    setEditingClassId(null)
+  }, [openClassPopup])
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [fullscreen, setFullscreen] = useState(false)
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null)
   const [availableSize, setAvailableSize] = useState<{ w: number; h: number } | null>(null)
+  const [zoom, setZoom] = useState(1)
   const imgWrapRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
   const rowRef = useRef<HTMLDivElement>(null)
@@ -201,6 +224,7 @@ export function ImageModal({
   useEffect(() => {
     setConfirmingDelete(false)
     setNaturalSize(null)
+    setZoom(1)
     const img = imgRef.current
     if (img && img.complete && img.naturalWidth > 0) {
       setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight })
@@ -227,6 +251,31 @@ export function ImageModal({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      const isTyping = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')
+
+      // zoom jalan di kondisi apapun (termasuk selagi editing bbox — kadang
+      // justru paling dibutuhkan di situ, buat naruh titik pojok box lebih
+      // presisi), KECUALI lagi ngetik di kolom teks (mis. nama kelas) — biar
+      // ngetik "0" atau "-" di situ tidak malah nge-zoom
+      if (!isTyping) {
+        if (e.key === '+' || e.key === '=') {
+          e.preventDefault()
+          zoomIn()
+          return
+        }
+        if (e.key === '-' || e.key === '_') {
+          e.preventDefault()
+          zoomOut()
+          return
+        }
+        if (e.key === '0') {
+          e.preventDefault()
+          resetZoom()
+          return
+        }
+      }
+
       if (editing) {
         // popup "pilih kelas" lagi terbuka: Escape nutup POPUP-nya dulu saja,
         // BUKAN langsung batalkan seluruh sesi koreksi — orang biasanya cuma
@@ -299,6 +348,7 @@ export function ImageModal({
     openClassPopup,
     label,
     filename,
+    stageId,
     annotationUrl,
     onDelete,
   ])
@@ -416,6 +466,16 @@ export function ImageModal({
     setOpenClassPopup(null)
   }
 
+  // ganti NAMA kelas yang sudah ada (mis. "object" bawaan -> "lanyard") —
+  // aman seperti tambah, BEDA dari hapus: index-nya (class_id di file .txt)
+  // tidak ikut bergeser sama sekali, cuma teksnya yang beda, jadi tidak
+  // perlu konfirmasi juga
+  function renameClass(classId: number, newName: string) {
+    const trimmed = newName.trim()
+    if (!trimmed || trimmed === classNames[classId] || classNames.includes(trimmed)) return
+    onClassNamesChange?.(classNames.map((n, i) => (i === classId ? trimmed : n)))
+  }
+
   // tambah kelas baru ke AKHIR daftar — aman, tidak menggeser index kelas
   // manapun yang sudah ada, jadi tidak perlu konfirmasi
   function addClass() {
@@ -477,11 +537,36 @@ export function ImageModal({
     setOpenClassPopup(null)
   }
 
+  // zoom pakai transform: scale() di imgWrapRef (bungkus <img> + overlay
+  // bbox jadi SATU) — koordinat bbox (persen relatif ke wrapper) & getRelPos
+  // (pakai getBoundingClientRect, otomatis ikut transform) tidak perlu
+  // disesuaikan sama sekali, tetap presisi di zoom berapa pun
+  function zoomIn() {
+    setZoom((z) => clampZoom(z + ZOOM_STEP))
+  }
+
+  function zoomOut() {
+    setZoom((z) => clampZoom(z - ZOOM_STEP))
+  }
+
+  function resetZoom() {
+    setZoom(1)
+  }
+
+  function handleWheelZoom(e: React.WheelEvent) {
+    // sengaja butuh Ctrl/Cmd ditahan — scroll biasa (mis. trackpad geser)
+    // tetap dipakai buat gulir gambar yang lagi diperbesar melebihi jendela,
+    // bukan otomatis nge-zoom tiap kali scroll sedikit
+    if (!e.ctrlKey && !e.metaKey) return
+    e.preventDefault()
+    setZoom((z) => clampZoom(z + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)))
+  }
+
   async function handleSave() {
     if (!projectId || !label || !filename) return
     setSaving(true)
     try {
-      await api.saveBoxes(projectId, label, filename, boxes.map(toYolo))
+      await api.saveBoxes(projectId, label, filename, boxes.map(toYolo), stageId)
       setEditing(false)
       setOpenClassPopup(null)
       onSaved?.()
@@ -519,7 +604,35 @@ export function ImageModal({
             {caption}
             {boxes.length > 0 && <span className="ml-2 text-emerald-400">· {boxes.length} bbox</span>}
           </span>
-          <div className="flex shrink-0 gap-2">
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="flex items-center gap-0.5 rounded-lg border border-slate-700 px-1 py-1">
+              <button
+                type="button"
+                onClick={zoomOut}
+                disabled={zoom <= ZOOM_MIN}
+                title="Perkecil (-)"
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={resetZoom}
+                title="Reset zoom (0)"
+                className="min-w-[3rem] rounded px-1 text-center font-mono text-[11px] text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                type="button"
+                onClick={zoomIn}
+                disabled={zoom >= ZOOM_MAX}
+                title="Perbesar (+)"
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                +
+              </button>
+            </div>
             <button
               type="button"
               onClick={() => setFullscreen((f) => !f)}
@@ -622,7 +735,11 @@ export function ImageModal({
           </div>
         </div>
 
-        <div ref={rowRef} className="relative flex min-h-0 flex-1 items-center justify-center">
+        <div
+          ref={rowRef}
+          onWheel={handleWheelZoom}
+          className="relative flex min-h-0 flex-1 items-center justify-center overflow-auto"
+        >
           {hasPrev && !editing && (
             <button
               type="button"
@@ -639,13 +756,22 @@ export function ImageModal({
             className={`relative ${editing ? 'cursor-crosshair' : ''}`}
             onPointerDown={handleBackgroundPointerDown}
             style={(() => {
+              // transform di sini (bukan di elemen lain) SENGAJA — wrapper
+              // ini bungkus <img> DAN semua overlay bbox jadi satu, jadi
+              // scale ikut menskalakan keduanya bareng, tetap presisi.
+              // getRelPos (buat gambar/geser box) pakai getBoundingClientRect
+              // yang otomatis merefleksikan transform ini, nol penyesuaian
+              // rumus koordinat lain yang dibutuhkan buat zoom jalan.
+              const zoomStyle: React.CSSProperties =
+                zoom !== 1 ? { transform: `scale(${zoom})`, transition: 'transform 100ms ease-out' } : {}
+
               // Full Frame (ada bbox): JANGAN hitung ukuran manual sama
               // sekali — biarkan <img> pakai max-height/max-width bawaan
               // CSS di bawah, wrapper otomatis menyusut pas ukuran gambar
               // (tidak ada style di sini = shrink-to-fit content). Ini
               // yang paling aman dari risiko bbox geser, lihat diskusi
               // sebelumnya (rumus manual sempat salah hitung sisa ruang).
-              if (hasBboxOverlay) return undefined
+              if (hasBboxOverlay) return zoomStyle
 
               // Crop (tanpa bbox): isi sebanyak mungkin dari RUANG YANG
               // BENERAN TERSEDIA (availableSize, diukur via ResizeObserver
@@ -654,11 +780,11 @@ export function ImageModal({
               // cuma membatasi gambar besar. Aman dilakukan di sini karena
               // tidak ada overlay yang bisa salah posisi kalau ukurannya
               // meleset dikit.
-              if (!naturalSize || !availableSize) return undefined
+              if (!naturalSize || !availableSize) return zoomStyle
               const ratio = naturalSize.w / naturalSize.h
               const w = Math.min(availableSize.w, availableSize.h * ratio)
               const h = Math.min(availableSize.h, availableSize.w / ratio)
-              return { width: `${w}px`, height: `${h}px` }
+              return { width: `${w}px`, height: `${h}px`, ...zoomStyle }
             })()}
           >
             <img
@@ -773,6 +899,41 @@ export function ImageModal({
                         {classNames.map((name, ci) => {
                           const selected = box.classId === ci
                           const optColor = classColor(ci)
+                          const isEditing = editingClassId === ci
+
+                          if (isEditing) {
+                            const commitRename = () => {
+                              renameClass(ci, editingName)
+                              setEditingClassId(null)
+                            }
+                            return (
+                              <li
+                                key={ci}
+                                className="flex items-center gap-1 rounded-lg border bg-slate-800 px-2 py-1"
+                                style={{ borderColor: optColor }}
+                              >
+                                <span className="font-mono text-xs text-slate-500">{ci}</span>
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={editingName}
+                                  onChange={(e) => setEditingName(e.target.value)}
+                                  onBlur={commitRename}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault()
+                                      commitRename()
+                                    } else if (e.key === 'Escape') {
+                                      e.preventDefault()
+                                      setEditingClassId(null)
+                                    }
+                                  }}
+                                  className="min-w-0 flex-1 rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-sm text-slate-100 focus:border-blue-500 focus:outline-none"
+                                />
+                              </li>
+                            )
+                          }
+
                           return (
                             <li
                               key={ci}
@@ -794,6 +955,17 @@ export function ImageModal({
                                     style={{ color: optColor }}
                                   />
                                 )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingClassId(ci)
+                                  setEditingName(name)
+                                }}
+                                title={`Ganti nama kelas "${name}"`}
+                                className="shrink-0 text-slate-500 hover:text-blue-400"
+                              >
+                                <PencilIcon className="h-3.5 w-3.5" />
                               </button>
                               <button
                                 type="button"
