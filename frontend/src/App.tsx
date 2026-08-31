@@ -63,9 +63,13 @@ export default function App() {
   const [togglingStream, setTogglingStream] = useState(false)
   const [captureTargets, setCaptureTargets] = useState<Set<string>>(new Set())
   const [focusLabel, setFocusLabel] = useState<string | null>(null)
-  // dipakai buat gating fase Training (harus ada minimal 1 label ter-assign
-  // dulu) di PhaseStepper — bukan buat konten, cuma existence check ringan
+  // dipakai buat gating fase Training di PhaseStepper — bukan buat konten,
+  // cuma existence check ringan. Dua indikator TERPISAH karena resep beda
+  // total: resnet "Persiapan Dataset selesai" = sudah ada label ter-assign,
+  // yolo TIDAK PERNAH lewat assign-label sama sekali (hasLabels mustahil
+  // true) — indikatornya = split_yolo sudah pernah digenerate.
   const [hasLabels, setHasLabels] = useState(false)
+  const [hasYoloSplit, setHasYoloSplit] = useState(false)
 
   const displayCameras = status?.cameras ?? cameras
   const runningIds = new Set(status?.interval_running ?? [])
@@ -191,6 +195,24 @@ export default function App() {
     return () => clearInterval(id)
   }, [reloadHasLabels])
 
+  const reloadHasYoloSplit = useCallback(() => {
+    if (!projectId) return setHasYoloSplit(false)
+    api
+      .getYoloSplit(projectId)
+      .then((summary) => setHasYoloSplit(summary.train + summary.val + summary.test > 0))
+      .catch(() => setHasYoloSplit(false))
+  }, [projectId])
+
+  useEffect(() => {
+    reloadHasYoloSplit()
+    const id = setInterval(reloadHasYoloSplit, 5000)
+    return () => clearInterval(id)
+  }, [reloadHasYoloSplit])
+
+  // indikator "Persiapan Dataset selesai" yang BENAR-BENAR dipakai gating —
+  // pilih sumbernya sesuai resep aktif project, bukan selalu hasLabels
+  const datasetPrepReady = activeProject?.dataset_target === 'yolo' ? hasYoloSplit : hasLabels
+
   const hasTargets = captureTargets.size > 0
 
   function parseResolution(value: string): Resolution | undefined {
@@ -273,12 +295,16 @@ export default function App() {
   // belum bisa diakses — cuma dikunci + tooltip alasannya (lihat PhaseStepper).
   function phaseDisabledReason(key: string): string | null {
     if (key === 'integration' && totalFrames === 0) return 'Ambil gambar dulu di fase Capture'
-    if (key === 'training' && !hasLabels) return 'Label dataset dulu di fase Persiapan Dataset'
+    if (key === 'training' && !datasetPrepReady) {
+      return activeProject?.dataset_target === 'yolo'
+        ? 'Split Dataset dulu di fase Persiapan Dataset'
+        : 'Label dataset dulu di fase Persiapan Dataset'
+    }
     return null
   }
   function phaseCompleted(key: string): boolean {
     if (key === 'capture') return totalFrames > 0
-    if (key === 'integration') return hasLabels
+    if (key === 'integration') return datasetPrepReady
     return false
   }
 
