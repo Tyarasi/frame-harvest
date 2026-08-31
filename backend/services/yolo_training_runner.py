@@ -208,11 +208,21 @@ def stop_training(project_id: str) -> bool:
     return True
 
 
+EVAL_PREDICTIONS_DIRNAME = "eval_predictions"
+
+
 def evaluate_test_set(project_dir: Path) -> dict:
     """Evaluasi model/best_yolo.pt terhadap split_yolo/images/test — held-out,
     tidak pernah dilihat selama training. mAP50/mAP50-95/precision/recall
     dihitung langsung oleh ultralytics (bukan manual seperti classifier
-    ResNet), sudah macro-average bawaan lintas kelas."""
+    ResNet), sudah macro-average bawaan lintas kelas.
+
+    SEKALIAN jalankan predict() per gambar (bukan cuma val() buat angka
+    agregat) — hasil bbox-nya ditulis sebagai file .txt format YOLO ke
+    model_yolo_runs/eval_predictions/, di-reuse langsung oleh ImageModal
+    (read-only) di frontend lewat annotationUrl yang sama dipakai galeri
+    lain — supaya user bisa LIHAT bukti deteksinya per gambar, bukan cuma
+    percaya angka mAP yang abstrak."""
     weights_path = project_dir / "model" / "best_yolo.pt"
     if not weights_path.exists():
         raise RuntimeError("Belum ada model YOLO tersimpan — jalankan training dulu sampai minimal 1 epoch selesai")
@@ -222,8 +232,16 @@ def evaluate_test_set(project_dir: Path) -> dict:
         raise RuntimeError("Split YOLO belum ada — jalankan 'Split Dataset' dulu")
 
     test_images_dir = project_dir / "split_yolo" / "images" / "test"
-    if not test_images_dir.exists() or not any(test_images_dir.glob("*.jpg")):
+    test_images = sorted(test_images_dir.glob("*.jpg")) if test_images_dir.exists() else []
+    if not test_images:
         raise RuntimeError("Folder split_yolo/images/test kosong — jalankan ulang 'Split Dataset'")
+
+    import yaml
+
+    class_names_raw = yaml.safe_load(data_yaml.read_text()).get("names", {})
+    # data.yaml nyimpen "names" berkunci index (bisa int atau string "0"
+    # tergantung round-trip yaml) — urutkan jadi list rapi berdasar index
+    class_names = [class_names_raw[k] for k in sorted(class_names_raw, key=lambda k: int(k))]
 
     model = YOLO(str(weights_path))
     # project=/name= WAJIB diisi eksplisit — kalau tidak, ultralytics nulis
@@ -234,10 +252,32 @@ def evaluate_test_set(project_dir: Path) -> dict:
         data=str(data_yaml), split="test", project=str(val_dir), name="eval", exist_ok=True, verbose=False
     )
 
+    # tulis ulang total (bukan nambah) — hasil evaluasi SEBELUMNYA (mis. dari
+    # model lama) tidak boleh nyampur sama hasil model saat ini
+    pred_dir = val_dir / EVAL_PREDICTIONS_DIRNAME
+    if pred_dir.exists():
+        shutil.rmtree(pred_dir)
+    pred_dir.mkdir(parents=True, exist_ok=True)
+
+    predictions = []
+    for img_path in test_images:
+        pred = model.predict(str(img_path), verbose=False)[0]
+        lines = []
+        for box in pred.boxes:
+            x, y, w, h = box.xywhn[0].tolist()
+            cls_id = int(box.cls[0])
+            lines.append(f"{cls_id} {x:.6f} {y:.6f} {w:.6f} {h:.6f}")
+        (pred_dir / img_path.with_suffix(".txt").name).write_text(
+            "\n".join(lines) + ("\n" if lines else "")
+        )
+        predictions.append({"path": img_path.name, "box_count": len(lines)})
+
     return {
-        "num_images": sum(1 for _ in test_images_dir.glob("*.jpg")),
+        "num_images": len(test_images),
         "precision": round(float(result.box.mp), 4),
         "recall": round(float(result.box.mr), 4),
         "map50": round(float(result.box.map50), 4),
         "map50_95": round(float(result.box.map), 4),
+        "class_names": class_names,
+        "predictions": predictions,
     }
