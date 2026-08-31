@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, type TrainingMetricPoint, type TrainingStatus } from '../../api'
+import { MetricCard } from '../ui/MetricCard'
 import { MetricsChart, type ChartSeries } from '../ui/MetricsChart'
+import { MetricInfoDetails } from './MetricInfoDetails'
+import { RESNET_LOSS_INFO, RESNET_METRIC_FOOTNOTE, RESNET_METRIC_INFO } from './metricInfo'
 
 const METRIC_SERIES: ChartSeries[] = [
   { key: 'accuracy', label: 'Accuracy', color: '#3987e5' },
@@ -10,45 +13,6 @@ const METRIC_SERIES: ChartSeries[] = [
 ]
 
 const LOSS_SERIES: ChartSeries[] = [{ key: 'loss', label: 'Loss', color: '#3987e5' }]
-
-const METRIC_INFO: Array<{ key: string; label: string; color: string; meaning: string; impact: string }> = [
-  {
-    key: 'accuracy',
-    label: 'Accuracy',
-    color: '#3987e5',
-    meaning:
-      'Persentase total tebakan yang benar dari seluruh data validasi — baik "karyawan" maupun "bukan_karyawan" yang ditebak tepat.',
-    impact:
-      'Gampang dibaca tapi bisa menipu kalau jumlah 2 kelas timpang. Kalau 90% data adalah "karyawan", model yang selalu menebak "karyawan" pun sudah dapat accuracy 90% padahal tidak berguna sama sekali.',
-  },
-  {
-    key: 'precision',
-    label: 'Precision',
-    color: '#d95926',
-    meaning:
-      'Dari semua crop yang ditebak model sebagai "karyawan", berapa persen yang memang benar karyawan.',
-    impact:
-      'Rendah = banyak false positive — orang yang bukan karyawan malah dianggap karyawan. Berbahaya kalau dipakai untuk kontrol akses, karena orang luar bisa lolos.',
-  },
-  {
-    key: 'recall',
-    label: 'Recall',
-    color: '#199e70',
-    meaning:
-      'Dari semua karyawan asli di data, berapa persen yang berhasil dikenali model sebagai "karyawan".',
-    impact:
-      'Rendah = banyak false negative — karyawan asli malah tidak dikenali sistem, mengganggu operasional (mis. akses/notifikasi otomatis gagal jalan untuk orang yang sah).',
-  },
-  {
-    key: 'f1',
-    label: 'F1',
-    color: '#c98500',
-    meaning:
-      'Rata-rata harmonis Precision dan Recall — 1 angka ringkas yang cuma tinggi kalau keduanya sama-sama bagus.',
-    impact:
-      'Dipakai sebagai patokan utama saat precision & recall harus sama-sama diperhatikan, karena menaikkan salah satu biasanya menurunkan yang lain — beda dari Accuracy yang bisa menipu di data timpang.',
-  },
-]
 
 interface Props {
   projectId: string
@@ -180,12 +144,13 @@ export function TrainingRunner({ projectId }: Props) {
       {latest && (
         <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {METRIC_SERIES.map((s) => (
-            <div key={s.key} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-              <p className="text-[10px] uppercase tracking-wide text-slate-500">{s.label}</p>
-              <p className="mt-1 font-mono text-lg" style={{ color: s.color }}>
-                {latest[s.key as keyof TrainingMetricPoint].toFixed(3)}
-              </p>
-            </div>
+            <MetricCard
+              key={s.key}
+              label={s.label}
+              color={s.color}
+              direction="up"
+              value={latest[s.key as keyof TrainingMetricPoint].toFixed(3)}
+            />
           ))}
         </div>
       )}
@@ -213,45 +178,7 @@ export function TrainingRunner({ projectId }: Props) {
             </div>
           </div>
 
-          <details className="mt-5 rounded-lg border border-slate-700 bg-slate-900 p-3 text-xs">
-            <summary className="cursor-pointer select-none font-medium text-slate-200">
-              Apa artinya angka-angka ini &amp; dampaknya ke model?
-            </summary>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {METRIC_INFO.map((m) => (
-                <div key={m.key} className="rounded-md border border-slate-600 bg-slate-800 p-2.5">
-                  <p className="font-mono text-[11px] font-semibold" style={{ color: m.color }}>
-                    {m.label}
-                  </p>
-                  <p className="mt-1 leading-snug text-slate-300">{m.meaning}</p>
-                  <p className="mt-1.5 leading-snug text-slate-300">
-                    <span className="font-medium text-slate-100">Dampak: </span>
-                    {m.impact}
-                  </p>
-                </div>
-              ))}
-              <div className="rounded-md border border-slate-600 bg-slate-800 p-2.5">
-                <p className="font-mono text-[11px] font-semibold text-blue-400">Loss</p>
-                <p className="mt-1 leading-snug text-slate-300">
-                  Seberapa jauh prediksi model dari label sebenarnya secara matematis — bukan
-                  persentase seperti 4 metrik lain.
-                </p>
-                <p className="mt-1.5 leading-snug text-slate-300">
-                  <span className="font-medium text-slate-100">Dampak: </span>
-                  Idealnya terus turun mendekati 0 tiap epoch; kalau berhenti turun (plateau)
-                  berarti model sudah "mentok" belajar dari epoch &amp; data yang tersedia saat
-                  ini.
-                </p>
-              </div>
-            </div>
-            <p className="mt-3 border-t border-slate-700 pt-3 leading-snug text-slate-300">
-              Precision dan Recall biasanya tarik-menarik — menaikkan salah satu lewat pengaturan
-              threshold cenderung menurunkan yang lain. Untuk kasus karyawan/lanyard ini: precision
-              rendah berarti orang luar bisa lolos dianggap karyawan (risiko keamanan), sedangkan
-              recall rendah berarti karyawan asli malah ditolak sistem (mengganggu operasional). F1
-              dipakai supaya keduanya tetap jadi perhatian bersama, bukan cuma salah satu.
-            </p>
-          </details>
+          <MetricInfoDetails metrics={RESNET_METRIC_INFO} lossInfo={RESNET_LOSS_INFO} footnote={RESNET_METRIC_FOOTNOTE} />
         </div>
       ) : (
         <p className="text-sm text-slate-500">

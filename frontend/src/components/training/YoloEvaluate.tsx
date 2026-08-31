@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { api, type YoloEvalResult } from '../../api'
+import { MetricCard } from '../ui/MetricCard'
+import { MetricInfoDetails } from './MetricInfoDetails'
+import { YOLO_METRIC_FOOTNOTE, YOLO_METRIC_INFO } from './metricInfo'
 
 interface Props {
   projectId: string
@@ -59,14 +62,10 @@ export function YoloEvaluate({ projectId }: Props) {
           <p className="mb-3 text-xs text-slate-500">{result.num_images} gambar test</p>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             {METRICS.map((m) => (
-              <div key={m.key} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-                <p className="text-[10px] uppercase tracking-wide text-slate-500">{m.label}</p>
-                <p className="mt-1 font-mono text-lg" style={{ color: m.color }}>
-                  {result[m.key].toFixed(3)}
-                </p>
-              </div>
+              <MetricCard key={m.key} label={m.label} color={m.color} direction="up" value={result[m.key].toFixed(3)} />
             ))}
           </div>
+          <MetricInfoDetails metrics={YOLO_METRIC_INFO} footnote={YOLO_METRIC_FOOTNOTE} />
         </div>
       )}
     </div>

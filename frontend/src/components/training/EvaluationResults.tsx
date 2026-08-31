@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, type TestEvalResult, type TestPrediction } from '../../api'
 import { ImageModal } from '../dataset-prep/ImageModal'
+import { MetricCard } from '../ui/MetricCard'
+import { MetricInfoDetails } from './MetricInfoDetails'
+import { RESNET_METRIC_FOOTNOTE, RESNET_METRIC_INFO } from './metricInfo'
 
 interface Props {
   projectId: string
@@ -105,14 +108,16 @@ export function EvaluationResults({ projectId, result }: Props) {
       </p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {METRICS.map((m) => (
-          <div key={m.key} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-            <p className="text-[10px] uppercase tracking-wide text-slate-500">{m.label}</p>
-            <p className="mt-1 font-mono text-lg" style={{ color: m.color }}>
-              {(result[m.key] as number).toFixed(3)}
-            </p>
-          </div>
+          <MetricCard
+            key={m.key}
+            label={m.label}
+            color={m.color}
+            direction="up"
+            value={(result[m.key] as number).toFixed(3)}
+          />
         ))}
       </div>
+      <MetricInfoDetails metrics={RESNET_METRIC_INFO} footnote={RESNET_METRIC_FOOTNOTE} />
 
       <div className="mt-6 border-t border-slate-800 pt-4">
         <div className="mb-3 flex flex-wrap items-center gap-4">
