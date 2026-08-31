@@ -139,16 +139,24 @@ def sync_crops_for_image(image_path: Path) -> int:
     return _write_crops_from_lines(image_path, lines, crops_dir)
 
 
-def crop_objects_label_dir(label_dir: Path, overwrite: bool = False) -> dict:
+def crop_objects_label_dir(
+    label_dir: Path, overwrite: bool = False, crops_dirname: str = CROPS_DIRNAME
+) -> dict:
     """Crop tiap bbox dari file .txt YOLO di sebelah gambar dalam label_dir jadi
-    gambar terpisah (satu crop per baris bbox), disimpan di label_dir/crops/
+    gambar terpisah (satu crop per baris bbox), disimpan di label_dir/<crops_dirname>/
     dengan nama "<nama_file_asli>_p<index>.jpg" — dipakai untuk siapkan dataset
     klasifikasi lanjutan (mis. ada/tidak lanyard) dari crop per-orang.
     Gambar yang sudah punya crop dilewati kecuali overwrite=True.
+
+    `crops_dirname` default CROPS_DIRNAME ("crops", perilaku lama, tidak
+    berubah) — dipakai apa adanya oleh alur lama. Tahap Crop yang general
+    (lihat stage_resolver.py) mengirim nama folder tahap itu sendiri di sini,
+    supaya crop bisa ditulis ke kedalaman rantai berapa pun, bukan cuma
+    "crops/" literal.
     """
     images = sorted(label_dir.glob("*.jpg"))
-    crops_dir = label_dir / CROPS_DIRNAME
-    crops_dir.mkdir(exist_ok=True)
+    crops_dir = label_dir / crops_dirname
+    crops_dir.mkdir(parents=True, exist_ok=True)
 
     processed = 0
     skipped = 0
@@ -186,19 +194,21 @@ def crop_objects_label_dir(label_dir: Path, overwrite: bool = False) -> dict:
     }
 
 
-def crop_top_label_dir(label_dir: Path, percent: float, overwrite: bool = False) -> dict:
-    """Crop ulang bagian ATAS tiap file crop yang SUDAH ADA di label_dir/crops/
+def crop_top_label_dir(src_dir: Path, dest_dir: Path, percent: float, overwrite: bool = False) -> dict:
+    """Crop ulang bagian ATAS tiap file crop yang SUDAH ADA di `src_dir`
     (bukan re-derive dari bbox mentah di frame asli) sejauh `percent` dari
-    TINGGI gambar crop itu, simpan ke label_dir/crops_top/ dengan nama file
-    identik ke sumbernya. Sengaja crop-dari-crop (bukan hitung ulang bbox)
-    supaya hasilnya pixel-identik dengan crop yang sudah dilihat/diverifikasi
-    user di "Crop Object" — nol risiko koordinat bbox dihitung beda kedua
+    TINGGI gambar crop itu, simpan ke `dest_dir` dengan nama file identik ke
+    sumbernya. Sengaja crop-dari-crop (bukan hitung ulang bbox) supaya
+    hasilnya pixel-identik dengan crop yang sudah dilihat/diverifikasi user
+    di "Crop Object" — nol risiko koordinat bbox dihitung beda kedua
     kalinya. Dipakai untuk fokus klasifikasi ke area atas tubuh (mis. leher/
     dada tempat lanyard biasa terlihat), buang bagian bawah yang tidak relevan.
+
+    `src_dir` diteruskan APA ADANYA oleh pemanggil (router) — biasanya hasil
+    `stage_resolver.final_stage_folder()`, supaya tetap benar walau tahap
+    Crop-nya sudah lebih dari 1 level (bukan cuma "crops/" literal lagi).
     """
-    src_dir = label_dir / CROPS_DIRNAME
-    dest_dir = label_dir / CROPS_TOP_DIRNAME
-    dest_dir.mkdir(exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
     if not src_dir.exists():
         return {"total_source": 0, "processed": 0, "skipped": 0}

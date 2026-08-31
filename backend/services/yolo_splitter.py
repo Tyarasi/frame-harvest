@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from services.stage_resolver import final_stage_folder
+
 DEFAULT_CLASS_NAMES = ["object"]
 
 
@@ -15,6 +17,7 @@ def split_yolo_dataset(
     test_ratio: float = 0.15,
     seed: int = 42,
     class_names: list[str] | None = None,
+    stages: list[dict] | None = None,
 ) -> dict:
     """Bagi frame PENUH (bukan crop per-objek) + file bbox .txt-nya jadi
     struktur standar ultralytics YOLO: split_dir/images/{train,val,test}/ dan
@@ -35,7 +38,13 @@ def split_yolo_dataset(
     `class_names`: daftar nama kelas (index list = index kelas di data.yaml,
     HARUS sinkron dengan class_id yang ditulis di file .txt tiap bbox lewat
     ImageModal saat koreksi manual — lihat write_boxes di person_annotator.py).
-    Boleh lebih dari 1 sekarang — bukan lagi 1 nama untuk kelas index 0 saja."""
+    Boleh lebih dari 1 sekarang — bukan lagi 1 nama untuk kelas index 0 saja.
+
+    `stages`: checklist tahap BBox/Crop project ini (lihat stage_resolver.py)
+    — kalau diisi, gambar+bbox diambil dari "ujung rantai" tahap saat ini
+    (bisa di dalam crop, bukan cuma frame penuh lagi), bukan dari akar
+    sample/<label>/ langsung. Default None = perilaku lama (akar), dipakai
+    kalau pemanggil tidak/belum punya info stages."""
     class_names = class_names or DEFAULT_CLASS_NAMES
     total = train_ratio + val_ratio + test_ratio
     if abs(total - 1.0) > 1e-6:
@@ -54,7 +63,8 @@ def split_yolo_dataset(
     for label_dir in sorted(sample_dir.iterdir()):
         if not label_dir.is_dir():
             continue
-        for img_path in sorted(label_dir.glob("*.jpg")):
+        source_dir = final_stage_folder(label_dir, stages) if stages else label_dir
+        for img_path in sorted(source_dir.glob("*.jpg")):
             if img_path.with_suffix(".txt").exists():
                 images.append(img_path)
 

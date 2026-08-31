@@ -1,8 +1,25 @@
 import re
 import shutil
+import uuid
 from pathlib import Path
 
 import yaml
+
+from services.stage_resolver import can_add_stage
+
+
+def _default_stages(dataset_target: str) -> list[dict]:
+    """Checklist tahap BBox/Crop bawaan tiap project baru — SAMA PERSIS
+    dengan alur resep lama (resnet: bbox->crop, yolo: bbox saja) supaya
+    nambah fitur ini tidak mengubah perilaku project yang sudah ada sama
+    sekali. Id 'root'/'crops' literal (bukan uuid) SENGAJA — lihat catatan
+    di stage_resolver.py soal kenapa tahap crop pertama harus id="crops"."""
+    if dataset_target == "yolo":
+        return [{"id": "root", "type": "bbox", "name": "Frame & BBox"}]
+    return [
+        {"id": "root", "type": "bbox", "name": "Frame & BBox Person"},
+        {"id": "crops", "type": "crop", "name": "Crop Object"},
+    ]
 
 
 class ProjectManager:
@@ -28,6 +45,11 @@ class ProjectManager:
         # undefined, TANPA menulis ulang file (cuma dilengkapi saat dibaca)
         for p in projects:
             p.setdefault("dataset_target", "resnet")
+            # project lama (dibuat sebelum fitur tahap general ini ada) belum
+            # punya "stages" di projects.yaml — isi checklist bawaan yang
+            # merepresentasikan PERSIS alur lama, tanpa menyentuh file di
+            # disk sama sekali (murni field baru yang dilengkapi saat baca)
+            p.setdefault("stages", _default_stages(p["dataset_target"]))
         return projects
 
     def _save(self, projects: list[dict]) -> None:
@@ -57,11 +79,19 @@ class ProjectManager:
             project_id = f"{base_id}-{n}"
             n += 1
 
-        project = {"id": project_id, "name": name, "dataset_target": dataset_target}
+        project = {
+            "id": project_id,
+            "name": name,
+            "dataset_target": dataset_target,
+            "stages": _default_stages(dataset_target),
+        }
         projects.append(project)
         self._save(projects)
         self.project_dir(project_id).mkdir(parents=True, exist_ok=True)
         return project
+
+    def get_project(self, project_id: str) -> dict | None:
+        return next((p for p in self._load() if p["id"] == project_id), None)
 
     def rename_project(self, project_id: str, new_name: str) -> dict | None:
         """Ganti nama tampilan project — id/folder-nya TIDAK ikut berubah
@@ -85,6 +115,45 @@ class ProjectManager:
         if target.exists():
             shutil.rmtree(target)
         return True
+
+    def add_stage(self, project_id: str, stage_type: str, name: str) -> dict:
+        """Tambah 1 tahap BBox/Crop ke akhir checklist project — BOLEH kapan
+        saja selama project sudah jalan (beda dari dataset_target yang
+        dikunci dari awal), karena kebutuhan crop-berlapis (mis. deteksi
+        object DI DALAM crop object sebelumnya) sering baru ketahuan setelah
+        lihat hasil tahap sebelumnya."""
+        name = name.strip()
+        if not name:
+            raise ValueError("Nama tahap tidak boleh kosong")
+        projects = self._load()
+        for project in projects:
+            if project["id"] == project_id:
+                error = can_add_stage(project["stages"], stage_type)
+                if error:
+                    raise ValueError(error)
+                stage = {"id": uuid.uuid4().hex[:8], "type": stage_type, "name": name}
+                project["stages"].append(stage)
+                self._save(projects)
+                return project
+        raise ValueError(f"Project '{project_id}' tidak ditemukan")
+
+    def remove_last_stage(self, project_id: str) -> dict:
+        """Hapus tahap TERAKHIR saja (bukan tahap sembarang di tengah — itu
+        akan merusak rantai bbox->crop tahap setelahnya). Tidak boleh hapus
+        sampai di bawah checklist bawaan (lihat _default_stages) — itu
+        anggapan dasar yang dipakai Label/Split, bukan sekadar 1 tahap biasa.
+        TIDAK menyentuh disk (folder/txt) — itu tanggung jawab pemanggil
+        (router), karena butuh tahu path sample-nya, bukan cuma project."""
+        projects = self._load()
+        for project in projects:
+            if project["id"] == project_id:
+                minimum = 1 if project["dataset_target"] == "yolo" else 2
+                if len(project["stages"]) <= minimum:
+                    raise ValueError("Tidak bisa hapus tahap dasar (bawaan) project ini")
+                project["stages"].pop()
+                self._save(projects)
+                return project
+        raise ValueError(f"Project '{project_id}' tidak ditemukan")
 
     def project_dir(self, project_id: str) -> Path:
         return self.projects_dir / project_id
