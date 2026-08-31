@@ -2,6 +2,8 @@
 # (routers/training_resnet.py): data, config, job registry, checkpoint
 # semuanya beda file/folder, sengaja tidak digabung 1 router ----
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -20,6 +22,13 @@ class YoloTrainingConfigRequest(BaseModel):
     epochs: int = 30
     batch_size: int = 16
     imgsz: int = 640
+    patience: int = 100
+    freeze: int = 0
+    mosaic: bool = True
+    fliplr: float = 0.5
+    flipud: float = 0.0
+    degrees: float = 0.0
+    cache: Literal["none", "ram", "disk"] = "none"
 
 
 @router.get("/api/projects/{project_id}/yolo-training-config")

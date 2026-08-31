@@ -62,6 +62,14 @@ def _run_training(job: YoloTrainingJob, project_dir: Path, config: dict) -> None
         epochs = max(1, int(config.get("epochs", 30)))
         batch = max(1, int(config.get("batch_size", 16)))
         imgsz = max(32, int(config.get("imgsz", 640)))
+        patience = max(0, int(config.get("patience", 100)))
+        freeze = max(0, int(config.get("freeze", 0)))
+        mosaic = 1.0 if config.get("mosaic", True) else 0.0
+        fliplr = min(1.0, max(0.0, float(config.get("fliplr", 0.5))))
+        flipud = min(1.0, max(0.0, float(config.get("flipud", 0.0))))
+        degrees = max(0.0, float(config.get("degrees", 0.0)))
+        cache_raw = config.get("cache", "none")
+        cache: bool | str = False if cache_raw == "none" else cache_raw
 
         job.status = "running"
         job.total_epochs = epochs
@@ -107,17 +115,30 @@ def _run_training(job: YoloTrainingJob, project_dir: Path, config: dict) -> None
 
         run_dir = project_dir / "model_yolo_runs"
         stopped_early = False
+        # freeze cuma dikirim kalau > 0 — freeze=0 eksplisit VS tidak dikirim
+        # sama sekali seharusnya sama-sama "tidak membekukan apapun", tapi
+        # lebih aman biarkan ultralytics pakai default-nya sendiri (None)
+        # untuk kasus paling umum (freeze dimatikan) daripada asumsi 0 valid
+        train_kwargs: dict = dict(
+            data=str(data_yaml),
+            epochs=epochs,
+            batch=batch,
+            imgsz=imgsz,
+            patience=patience,
+            mosaic=mosaic,
+            fliplr=fliplr,
+            flipud=flipud,
+            degrees=degrees,
+            cache=cache,
+            project=str(run_dir),
+            name="run",
+            exist_ok=True,
+            verbose=False,
+        )
+        if freeze > 0:
+            train_kwargs["freeze"] = freeze
         try:
-            model.train(
-                data=str(data_yaml),
-                epochs=epochs,
-                batch=batch,
-                imgsz=imgsz,
-                project=str(run_dir),
-                name="run",
-                exist_ok=True,
-                verbose=False,
-            )
+            model.train(**train_kwargs)
         except StopTraining:
             stopped_early = True
 
