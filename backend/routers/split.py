@@ -55,6 +55,7 @@ def create_yolo_split(project_id: str, req: YoloSplitRequest):
     split/ ResNet, tidak akan pernah tertukar struktur)."""
     require_project(project_id)
     pdir = project_manager.project_dir(project_id)
+    project = project_manager.get_project(project_id)
     class_names = [c.strip() for c in req.class_names if c.strip()] or ["object"]
     try:
         return split_yolo_dataset(
@@ -65,6 +66,10 @@ def create_yolo_split(project_id: str, req: YoloSplitRequest):
             req.test_ratio,
             req.seed,
             class_names,
+            # ambil gambar+bbox dari UJUNG RANTAI tahap saat ini — bisa dari
+            # dalam crop (mis. bbox lanyard di crop person), bukan cuma frame
+            # penuh lagi (lihat stage_resolver.py & yolo_splitter.py)
+            stages=project["stages"] if project else None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))

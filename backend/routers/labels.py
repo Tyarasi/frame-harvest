@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.person_annotator import CROPS_DIRNAME, CROPS_TOP_DIRNAME
-from state import get_capture_manager, get_label_dataset
+from services.person_annotator import CROPS_TOP_DIRNAME
+from services.stage_resolver import final_stage_folder
+from state import get_capture_manager, get_label_dataset, project_manager
 
 router = APIRouter()
 
@@ -26,10 +27,19 @@ def list_labels(project_id: str):
 def assign_label(project_id: str, label: str, req: AssignLabelRequest):
     if not label.strip():
         raise HTTPException(400, "Nama label tidak boleh kosong")
-    if req.source not in (CROPS_DIRNAME, CROPS_TOP_DIRNAME):
-        raise HTTPException(400, f"source harus '{CROPS_DIRNAME}' atau '{CROPS_TOP_DIRNAME}'")
+    if req.source not in ("crops", CROPS_TOP_DIRNAME):
+        raise HTTPException(400, f"source harus 'crops' atau '{CROPS_TOP_DIRNAME}'")
     cm = get_capture_manager(project_id)
-    crops_dir = cm.label_dir(req.sample) / req.source
+    if req.source == "crops":
+        # "crops" sekarang berarti "ujung rantai tahap Crop saat ini" —
+        # biasanya literal crops/ (checklist bawaan), tapi kalau project ini
+        # sudah nambah tahap crop lebih dalam, ikut situ (lihat
+        # stage_resolver.py) — bukan literal CROPS_DIRNAME lagi
+        project = project_manager.get_project(project_id)
+        stages = project["stages"] if project else []
+        crops_dir = final_stage_folder(cm.label_dir(req.sample), stages)
+    else:
+        crops_dir = cm.label_dir(req.sample) / req.source
     if not crops_dir.exists():
         raise HTTPException(404, f"Sample '{req.sample}' belum punya crop di '{req.source}/'")
     assigned = get_label_dataset(project_id).assign(label, crops_dir, req.filenames)
