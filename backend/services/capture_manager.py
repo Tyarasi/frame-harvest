@@ -119,6 +119,63 @@ class CaptureManager:
             "bbox_count": bbox_count,
         }
 
+    def list_stage_images(self, folder: Path, sample: str, limit: int = 5000) -> list[dict]:
+        """Versi generik dari list_images/list_crops — dipakai tahap BBox/
+        Crop yang general (bisa di folder MANAPUN dalam rantai, bukan cuma
+        akar atau CROPS_DIRNAME literal). `sample` cuma buat isi field
+        "label" di hasil (nama sample, BUKAN path folder) — path gambar
+        sendiri dihitung dari lokasi `folder` relatif ke sample_dir, jadi
+        otomatis benar di kedalaman berapa pun."""
+        if not folder.exists():
+            return []
+        files = sorted(folder.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+        rel = folder.relative_to(self.sample_dir).as_posix()
+        result = []
+        for f in files[:limit]:
+            txt_path = f.with_suffix(".txt")
+            bbox_count = 0
+            if txt_path.exists():
+                bbox_count = sum(1 for line in txt_path.read_text().splitlines() if line.strip())
+            result.append(
+                {
+                    "path": f"{rel}/{f.name}",
+                    "camera_id": re.sub(r"_\d{8}_\d{6}_\d{3}$", "", re.sub(r"_p\d+$", "", f.stem)),
+                    "label": sample,
+                    "size_bytes": f.stat().st_size,
+                    "bbox_count": bbox_count,
+                }
+            )
+        return result
+
+    def list_all_stage_images(self, folders_by_sample: dict[str, Path], limit: int = 5000) -> list[dict]:
+        """Versi "Semua Sample" dari list_stage_images — gabung hasil tiap
+        sample (folder-nya sudah dihitung per-sample oleh pemanggil, lihat
+        routers/capture.py::_resolve_stage_dir_all) lalu urutkan ulang
+        gabungannya, sama seperti list_all_images/list_all_crops."""
+        entries: list[tuple[Path, str]] = []
+        for sample, folder in folders_by_sample.items():
+            if not folder.exists():
+                continue
+            entries.extend((f, sample) for f in folder.glob("*.jpg"))
+        entries.sort(key=lambda item: item[0].stat().st_mtime, reverse=True)
+        result = []
+        for f, sample in entries[:limit]:
+            txt_path = f.with_suffix(".txt")
+            bbox_count = 0
+            if txt_path.exists():
+                bbox_count = sum(1 for line in txt_path.read_text().splitlines() if line.strip())
+            rel = f.relative_to(self.sample_dir).as_posix()
+            result.append(
+                {
+                    "path": rel,
+                    "camera_id": re.sub(r"_\d{8}_\d{6}_\d{3}$", "", re.sub(r"_p\d+$", "", f.stem)),
+                    "label": sample,
+                    "size_bytes": f.stat().st_size,
+                    "bbox_count": bbox_count,
+                }
+            )
+        return result
+
     def list_crops(self, label: str, limit: int = 60, dirname: str = CROPS_DIRNAME) -> list[dict]:
         crops_dir = self.sample_dir / self._safe_name(label) / dirname
         if not crops_dir.exists():
@@ -147,6 +204,25 @@ class CaptureManager:
             "label": label,
             "size_bytes": filepath.stat().st_size,
         }
+
+    def delete_images_in(self, folder: Path, filenames: list[str]) -> int:
+        """Versi generik dari delete_images/delete_crops — hapus di folder
+        MANAPUN dalam rantai tahap (lihat stage_resolver.py), bukan cuma
+        akar atau CROPS_DIRNAME literal. Ikut buang .txt pasangannya kalau
+        ada (folder tahap manapun sekarang bisa punya bbox sendiri, lihat
+        fitur anotasi langsung di halaman Crop Object)."""
+        deleted = 0
+        for filename in filenames:
+            if "/" in filename or "\\" in filename or filename in (".", ".."):
+                continue
+            filepath = folder / filename
+            if filepath.is_file():
+                filepath.unlink()
+                deleted += 1
+                txt_path = filepath.with_suffix(".txt")
+                if txt_path.is_file():
+                    txt_path.unlink()
+        return deleted
 
     def delete_crops(self, label: str, filenames: list[str]) -> int:
         crops_dir = self.sample_dir / self._safe_name(label) / CROPS_DIRNAME
