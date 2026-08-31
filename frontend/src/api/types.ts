@@ -201,12 +201,21 @@ export interface YoloTrainingStatus {
   error: string | null
 }
 
+export interface YoloTestPrediction {
+  path: string
+  box_count: number
+}
+
 export interface YoloEvalResult {
   num_images: number
   precision: number
   recall: number
   map50: number
   map50_95: number
+  // bukti visual per-gambar — nama kelas (buat label bbox) & daftar
+  // prediksi (bbox-nya ada di file .txt terpisah, lihat yoloEvalPredictionUrl)
+  class_names: string[]
+  predictions: YoloTestPrediction[]
 }
 
 export interface TrainingStatus {

@@ -78,6 +78,17 @@ export const captureApi = {
   splitTestImageUrl: (projectId: string, path: string) =>
     `/projects/${encodeURIComponent(projectId)}/split/test/${path}`,
 
+  // versi YOLO dari splitTestImageUrl — struktur beda total (images/test/,
+  // bukan test/<label>/), lihat yolo_splitter.py
+  yoloTestImageUrl: (projectId: string, filename: string) =>
+    `/projects/${encodeURIComponent(projectId)}/split_yolo/images/test/${filename}`,
+
+  // bbox HASIL PREDIKSI model (bukan ground truth) terhadap 1 gambar test —
+  // ditulis evaluate_test_set() ke model_yolo_runs/eval_predictions/, dibaca
+  // ImageModal read-only sebagai bukti visual deteksi (lihat YoloEvaluate.tsx)
+  yoloEvalPredictionUrl: (projectId: string, filename: string) =>
+    `/projects/${encodeURIComponent(projectId)}/model_yolo_runs/eval_predictions/${filename.replace(/\.jpg$/i, '.txt')}`,
+
   // file label YOLO ("<nama_file>.txt") disimpan di sebelah "<nama_file>.jpg"
   // yang sama — lihat person_annotator.py di backend
   annotationUrl: (projectId: string, path: string) =>
