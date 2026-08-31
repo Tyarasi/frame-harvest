@@ -56,13 +56,19 @@ export const captureApi = {
       { method: 'POST' },
     ),
 
-  listImages: (projectId: string, label: string, limit = 5000) =>
+  // `stageId` opsional — kosong = folder akar (perilaku lama persis). Diisi
+  // buat tahap BBox/Crop general yang bisa dirantai (lihat api/types.ts::Stage)
+  listImages: (projectId: string, label: string, limit = 5000, stageId?: string) =>
     request<DatasetImage[]>(
-      `${p(projectId)}/sample/${encodeURIComponent(label)}/images?limit=${limit}`,
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/images?limit=${limit}` +
+        (stageId ? `&stage_id=${encodeURIComponent(stageId)}` : ''),
     ),
 
-  listAllImages: (projectId: string, limit = 5000) =>
-    request<DatasetImage[]>(`${p(projectId)}/sample/images?limit=${limit}`),
+  listAllImages: (projectId: string, limit = 5000, stageId?: string) =>
+    request<DatasetImage[]>(
+      `${p(projectId)}/sample/images?limit=${limit}` +
+        (stageId ? `&stage_id=${encodeURIComponent(stageId)}` : ''),
+    ),
 
   sampleImageUrl: (projectId: string, path: string) =>
     `/projects/${encodeURIComponent(projectId)}/sample/${path}`,
@@ -77,9 +83,10 @@ export const captureApi = {
   annotationUrl: (projectId: string, path: string) =>
     `/projects/${encodeURIComponent(projectId)}/sample/${path.replace(/\.jpg$/i, '.txt')}`,
 
-  deleteImages: (projectId: string, label: string, filenames: string[]) =>
+  deleteImages: (projectId: string, label: string, filenames: string[], stageId?: string) =>
     request<{ deleted: number }>(
-      `${p(projectId)}/sample/${encodeURIComponent(label)}/images`,
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/images` +
+        (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
       {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
@@ -87,23 +94,39 @@ export const captureApi = {
       },
     ),
 
-  annotateLabel: (projectId: string, label: string, overwrite = false, confidence = 0.4) =>
-    request<AnnotateResult>(`${p(projectId)}/sample/${encodeURIComponent(label)}/annotate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confidence, overwrite }),
-    }),
+  // auto-detect (`annotate*`) cuma tersedia di tahap BBox PERTAMA project —
+  // backend menolak (400) kalau stageId bukan tahap pertama, lihat routers/capture.py
+  annotateLabel: (
+    projectId: string,
+    label: string,
+    overwrite = false,
+    confidence = 0.4,
+    stageId?: string,
+  ) =>
+    request<AnnotateResult>(
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/annotate` +
+        (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confidence, overwrite }),
+      },
+    ),
 
-  annotateAll: (projectId: string, overwrite = false, confidence = 0.4) =>
-    request<AnnotateResult>(`${p(projectId)}/sample/annotate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ confidence, overwrite }),
-    }),
+  annotateAll: (projectId: string, overwrite = false, confidence = 0.4, stageId?: string) =>
+    request<AnnotateResult>(
+      `${p(projectId)}/sample/annotate` + (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confidence, overwrite }),
+      },
+    ),
 
-  saveBoxes: (projectId: string, label: string, filename: string, boxes: YoloBox[]) =>
+  saveBoxes: (projectId: string, label: string, filename: string, boxes: YoloBox[], stageId?: string) =>
     request<{ boxes: number }>(
-      `${p(projectId)}/sample/${encodeURIComponent(label)}/images/${encodeURIComponent(filename)}/boxes`,
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/images/${encodeURIComponent(filename)}/boxes` +
+        (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -111,28 +134,45 @@ export const captureApi = {
       },
     ),
 
-  cropObjects: (projectId: string, label: string, overwrite = false) =>
-    request<CropResult>(`${p(projectId)}/sample/${encodeURIComponent(label)}/crop-objects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ overwrite }),
-    }),
-
-  cropAllObjects: (projectId: string, overwrite = false) =>
-    request<CropResult>(`${p(projectId)}/sample/crop-objects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ overwrite }),
-    }),
-
-  listCrops: (projectId: string, label: string, limit = 5000, excludeAssigned = false) =>
-    request<CropImage[]>(
-      `${p(projectId)}/sample/${encodeURIComponent(label)}/crops?limit=${limit}&exclude_assigned=${excludeAssigned}`,
+  // dipakai HANYA untuk tahap type='crop' — jalankan crop dari bbox tahap
+  // sebelumnya, tulis hasilnya ke folder tahap crop ini sendiri
+  cropObjects: (projectId: string, label: string, overwrite = false, stageId?: string) =>
+    request<CropResult>(
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/crop-objects` +
+        (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overwrite }),
+      },
     ),
 
-  listAllCrops: (projectId: string, limit = 5000, excludeAssigned = false) =>
+  cropAllObjects: (projectId: string, overwrite = false, stageId?: string) =>
+    request<CropResult>(
+      `${p(projectId)}/sample/crop-objects` + (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overwrite }),
+      },
+    ),
+
+  listCrops: (
+    projectId: string,
+    label: string,
+    limit = 5000,
+    excludeAssigned = false,
+    stageId?: string,
+  ) =>
     request<CropImage[]>(
-      `${p(projectId)}/sample/crops?limit=${limit}&exclude_assigned=${excludeAssigned}`,
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/crops?limit=${limit}&exclude_assigned=${excludeAssigned}` +
+        (stageId ? `&stage_id=${encodeURIComponent(stageId)}` : ''),
+    ),
+
+  listAllCrops: (projectId: string, limit = 5000, excludeAssigned = false, stageId?: string) =>
+    request<CropImage[]>(
+      `${p(projectId)}/sample/crops?limit=${limit}&exclude_assigned=${excludeAssigned}` +
+        (stageId ? `&stage_id=${encodeURIComponent(stageId)}` : ''),
     ),
 
   // crop bagian atas (mis. 25% teratas) dari crop full-body yang sudah ada —
@@ -170,9 +210,10 @@ export const captureApi = {
       method: 'DELETE',
     }),
 
-  deleteCrops: (projectId: string, label: string, filenames: string[]) =>
+  deleteCrops: (projectId: string, label: string, filenames: string[], stageId?: string) =>
     request<{ deleted: number }>(
-      `${p(projectId)}/sample/${encodeURIComponent(label)}/crops`,
+      `${p(projectId)}/sample/${encodeURIComponent(label)}/crops` +
+        (stageId ? `?stage_id=${encodeURIComponent(stageId)}` : ''),
       {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },

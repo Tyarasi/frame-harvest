@@ -15,10 +15,20 @@ export interface Camera {
 // mengarahkan UI Persiapan Dataset ke rangkaian langkah yang berbeda.
 export type DatasetTarget = 'resnet' | 'yolo'
 
+// 1 tahap BBox atau Crop dalam checklist project — bisa dirantai
+// berkali-kali (bbox->crop->bbox->crop->...), bukan lagi sekali per project.
+// Lihat backend/services/stage_resolver.py untuk aturan & resolusi foldernya.
+export interface Stage {
+  id: string
+  type: 'bbox' | 'crop'
+  name: string
+}
+
 export interface Project {
   id: string
   name: string
   dataset_target: DatasetTarget
+  stages: Stage[]
 }
 
 export interface DatasetImage {
